@@ -57,5 +57,6 @@ declare module 'vue' {
     TranslatedHTML: typeof import('./src/components/common/TranslatedHTML.vue')['default']
     UserMenu: typeof import('./src/components/common/UserMenu.vue')['default']
     WarehouseAvailabilityDialog: typeof import('./src/components/sale/WarehouseAvailabilityDialog.vue')['default']
+    WarehouseStockList: typeof import('./src/components/sale/WarehouseStockList.vue')['default']
   }
 }

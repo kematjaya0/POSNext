@@ -2366,6 +2366,7 @@ async function handleOptionSelected(option) {
 				conversion_factor: option.conversion_factor,
 				rate: pricing.rate,
 				price_list_rate: pricing.price_list_rate,
+				...(option.warehouse ? { warehouse: option.warehouse } : {}),
 			};
 
 			if (itemToAdd.has_batch_no || itemToAdd.has_serial_no) {

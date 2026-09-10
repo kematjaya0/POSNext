@@ -119,6 +119,115 @@ def get_stock_availability(item_code, warehouse):
 	return flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
 
 
+def _get_uom_conversion_factor(item_code, uom):
+	"""Stock-uom-per-1-`uom` factor, 1.0 when `uom` is empty or is the item's own stock UOM."""
+	if not uom:
+		return 1.0
+
+	stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
+	if not stock_uom or uom == stock_uom:
+		return 1.0
+
+	factor = frappe.db.get_value(
+		"UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor"
+	)
+	return flt(factor) if factor else 1.0
+
+
+@frappe.whitelist()
+def get_item_warehouse_stock(item_code, uom=None, pos_profile=None):
+	"""Warehouse candidates + stock (converted to `uom`) for one item, for the
+	add/edit item dialogs.
+
+	Ordered: warehouses the cashier owns (via their nextend Warehouse Group)
+	in the POS Profile's own company first, then owned warehouses in other
+	companies, then the rest of the profile's company. POS Settings' own
+	warehouse picker is untouched by this - it always stays locked to
+	POS Profile.warehouse.
+	"""
+	if not item_code or not pos_profile:
+		return []
+
+	profile = frappe.db.get_value("POS Profile", pos_profile, ["company", "warehouse"], as_dict=True)
+	if not profile or not profile.company:
+		return []
+
+	try:
+		from nextend.warehouse_group import get_user_warehouses
+
+		own_warehouses = set(get_user_warehouses(frappe.session.user))
+	except Exception:
+		own_warehouses = set()
+
+	candidates = frappe.get_all(
+		"Warehouse",
+		filters={"company": profile.company, "disabled": 0, "is_group": 0},
+		fields=["name", "warehouse_name", "company"],
+	)
+	same_company_names = {w.name for w in candidates}
+
+	other_own = own_warehouses - same_company_names
+	if other_own:
+		candidates += frappe.get_all(
+			"Warehouse",
+			filters={"name": ["in", list(other_own)], "disabled": 0, "is_group": 0},
+			fields=["name", "warehouse_name", "company"],
+		)
+
+	if not candidates:
+		return []
+
+	company_abbr = {
+		c.name: c.abbr
+		for c in frappe.get_all(
+			"Company",
+			filters={"name": ["in", list({w.company for w in candidates})]},
+			fields=["name", "abbr"],
+		)
+	}
+
+	conversion_factor = _get_uom_conversion_factor(item_code, uom)
+
+	Bin = DocType("Bin")
+	stock_rows = (
+		frappe.qb.from_(Bin)
+		.select(Bin.warehouse, Bin.actual_qty)
+		.where(Bin.item_code == item_code)
+		.where(Bin.warehouse.isin([w.name for w in candidates]))
+		.run(as_dict=True)
+	)
+	stock_by_warehouse = {row.warehouse: flt(row.actual_qty) for row in stock_rows}
+
+	result = []
+	for warehouse in candidates:
+		is_own = warehouse.name in own_warehouses
+		is_native_company = warehouse.company == profile.company
+		actual_qty = stock_by_warehouse.get(warehouse.name, 0.0)
+		result.append(
+			{
+				"warehouse": warehouse.name,
+				"warehouse_name": warehouse.warehouse_name or warehouse.name,
+				"company": warehouse.company,
+				"company_abbr": company_abbr.get(warehouse.company),
+				"is_own": is_own,
+				"is_native_company": is_native_company,
+				"stock_qty": flt(actual_qty / conversion_factor),
+			}
+		)
+
+	def sort_key(row):
+		if row["is_own"] and row["is_native_company"]:
+			tier = 0
+		elif row["is_own"]:
+			tier = 1
+		else:
+			tier = 2
+		return (tier, row["warehouse_name"])
+
+	result.sort(key=sort_key)
+	return result
+
+
 def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=None):
 	"""
 	Get comprehensive item details including batch/serial data, pricing, and stock information.

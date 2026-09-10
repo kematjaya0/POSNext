@@ -177,6 +177,15 @@
 						</div>
 					</div>
 
+					<!-- Warehouse Selection - hides itself when there's nothing to choose from -->
+					<WarehouseStockList
+						v-model="selectedWarehouse"
+						:item-code="item?.item_code"
+						:uom="selectedOption?.uom"
+						:pos-profile="posProfile"
+						@warehouse-stock="selectedWarehouseStock = $event"
+					/>
+
 					<!-- Quantity Control -->
 					<div>
 						<label class="block text-sm font-medium text-gray-700 mb-2 text-start">{{
@@ -368,6 +377,7 @@ import { Button, Dialog } from "frappe-ui";
 import { createResource } from "frappe-ui";
 import { computed, nextTick, ref, watch } from "vue";
 import TranslatedHTML from "../common/TranslatedHTML.vue";
+import WarehouseStockList from "./WarehouseStockList.vue";
 import { offlineState } from "@/utils/offline/offlineState";
 import { getCachedVariants, cacheItems } from "@/utils/offline/items";
 
@@ -395,6 +405,8 @@ const isOpen = computed({
 const loading = ref(false);
 const options = ref([]);
 const selectedOption = ref(null);
+const selectedWarehouse = ref("");
+const selectedWarehouseStock = ref(null);
 const quantity = ref(1);
 const selectedAttributes = ref({}); // For variant attribute selection
 const quantityInput = ref(null);
@@ -418,8 +430,14 @@ const confirmButtonText = computed(() => {
 const stockWarning = computed(() => {
 	if (props.mode !== "uom" || !selectedOption.value) return null;
 
+	// Prefer the stock of the warehouse chosen in WarehouseStockList (already
+	// converted to the selected UOM) - falls back to the option's own stock
+	// when that list hides itself (single-warehouse case, unchanged behavior)
 	const availableStock =
-		selectedOption.value.stock_qty ?? selectedOption.value.actual_qty ?? null;
+		selectedWarehouseStock.value?.stock_qty ??
+		selectedOption.value.stock_qty ??
+		selectedOption.value.actual_qty ??
+		null;
 	if (availableStock === null) return null;
 
 	if (quantity.value > availableStock) {
@@ -584,6 +602,8 @@ watch([() => props.mode, () => props.item], ([, newItem]) => {
  */
 async function loadOptions() {
 	selectedOption.value = null;
+	selectedWarehouse.value = props.item.warehouse || "";
+	selectedWarehouseStock.value = null;
 	quantity.value = props.item.resolved_qty || 1;
 	selectedAttributes.value = {}; // Reset attribute selection
 
@@ -696,6 +716,9 @@ function confirm() {
 		const option = { ...selectedOption.value };
 		if (props.mode === "uom") {
 			option.quantity = quantity.value;
+			if (selectedWarehouse.value) {
+				option.warehouse = selectedWarehouse.value;
+			}
 		}
 		emit("option-selected", option);
 	}

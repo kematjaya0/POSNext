@@ -250,21 +250,17 @@
 															:options="uomOptions"
 														/>
 													</div>
-
-													<!-- Warehouse Selector -->
-													<div>
-														<label
-															class="block text-sm font-medium text-gray-700 mb-2 text-start"
-															>{{ __("Warehouse") }}</label
-														>
-														<SelectInput
-															v-model="localWarehouse"
-															:options="warehouseOptions"
-															@change="handleWarehouseChange"
-														/>
-													</div>
 												</div>
 											</div>
+
+											<!-- Warehouse Selection - hides itself when there's nothing to choose from -->
+											<WarehouseStockList
+												v-model="localWarehouse"
+												:item-code="localItem?.item_code"
+												:uom="localUom"
+												:pos-profile="editItemPosProfile"
+												@update:model-value="handleWarehouseChange"
+											/>
 
 											<!-- Serial Numbers Section (only for serial items) -->
 											<div
@@ -485,6 +481,7 @@ import {
 import { Button, FeatherIcon, createResource } from "frappe-ui";
 import { computed, ref, watch } from "vue";
 import SelectInput from "@/components/common/SelectInput.vue";
+import WarehouseStockList from "./WarehouseStockList.vue";
 
 const { showSuccess, showError, showWarning } = useToast();
 const settingsStore = usePOSSettingsStore();
@@ -578,15 +575,11 @@ const uomOptions = computed(() => {
 	return options;
 });
 
-const warehouseOptions = computed(() => {
-	if (props.warehouses.length > 0) {
-		return props.warehouses.map((w) => ({
-			value: w.name,
-			label: w.warehouse || w.name,
-		}));
-	}
-	return [{ value: localWarehouse.value, label: localWarehouse.value || __("Default") }];
-});
+// POS Profile used to scope the WarehouseStockList query - same resolution
+// as getRateForUom() below (settings override, else the item's own profile)
+const editItemPosProfile = computed(
+	() => settingsStore.settings?.pos_profile || localItem.value?.pos_profile
+);
 
 const discountTypeOptions = computed(() => [
 	{ value: "percentage", label: __("Percentage (%)") },

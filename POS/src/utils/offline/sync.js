@@ -331,6 +331,23 @@ const syncInvoiceToServer = async (invoice, retryCount = 0) => {
 		if (response.message || response.name) {
 			const serverName = response.name || response.message;
 			await markInvoiceSynced(invoice.id, serverName, offlineId);
+
+			// nextend's sales approval parks a below-list-price sale as a DRAFT
+			// and still returns its name, so the queue entry is correctly done
+			// with — but the sale is not finished, and saying "synced" here
+			// would send anyone reading these logs looking for a submitted
+			// invoice that does not exist yet.
+			if (response.requires_approval) {
+				log.warn("Invoice synced as draft, awaiting approval", {
+					id: invoice.id,
+					offline_id: offlineId,
+					sales_invoice: serverName,
+					pending_role: response.pending_role,
+					approval_request: response.approval_request,
+				});
+				return { status: "success" };
+			}
+
 			log.success("Invoice synced", {
 				id: invoice.id,
 				offline_id: offlineId,

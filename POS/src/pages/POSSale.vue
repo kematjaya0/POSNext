@@ -569,6 +569,7 @@
 				v-model="showApprovalDialog"
 				:info="approvalInfo"
 				@approved="handleApprovalCompleted"
+				@cancelled="handleApprovalCancelled"
 			/>
 
 			<!-- Coupon Dialog -->
@@ -1088,6 +1089,53 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
  */
 const showApprovalDialog = ref(false);
 const approvalInfo = ref({});
+
+/**
+ * Server pushes the verdict so the cashier does not have to keep pressing
+ * "Cek Status" while a customer waits. Same transport the stock updates use
+ * (window.frappe.realtime); the button stays as a manual fallback for when
+ * the socket is not connected.
+ */
+const APPROVAL_EVENT = "nextend_sales_approval_update";
+
+function handleApprovalRealtime(payload) {
+	// Only react to the sale this till is actually holding — the event is
+	// addressed to the user, and one cashier can have several tills open.
+	if (!payload?.invoice || payload.invoice !== approvalInfo.value?.name) return;
+
+	if (payload.status === "Approved") {
+		showApprovalDialog.value = false;
+		handleApprovalCompleted(payload.invoice);
+		return;
+	}
+
+	if (payload.status === "Rejected") {
+		approvalInfo.value = {
+			...approvalInfo.value,
+			approval_rejected: true,
+			rejection_reason: payload.rejection_reason,
+		};
+		showWarning(__("Approval untuk {0} ditolak.", [payload.invoice]));
+	}
+}
+
+onMounted(() => {
+	window.frappe?.realtime?.on(APPROVAL_EVENT, handleApprovalRealtime);
+});
+
+onUnmounted(() => {
+	window.frappe?.realtime?.off(APPROVAL_EVENT, handleApprovalRealtime);
+});
+
+/**
+ * The cashier gave up waiting. The draft and its approval request are gone
+ * server-side, so the till returns to a clean cart.
+ */
+function handleApprovalCancelled(invoiceName) {
+	cartStore.clearCart();
+	previousCartHash = "";
+	showWarning(__("Transaksi {0} dibatalkan.", [invoiceName]));
+}
 
 /**
  * Fired when the cashier polls "Cek Status" and the document has since been

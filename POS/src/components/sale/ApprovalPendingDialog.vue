@@ -65,6 +65,14 @@
 
 				<div class="mt-6 flex flex-wrap justify-end gap-2">
 					<Button
+						theme="red"
+						variant="subtle"
+						:loading="cancelling"
+						@click="cancelTransaction"
+					>
+						{{ __("Batalkan Transaksi") }}
+					</Button>
+					<Button
 						v-if="!rejected"
 						:loading="checking"
 						variant="subtle"
@@ -98,9 +106,10 @@ const props = defineProps({
 	info: { type: Object, default: () => ({}) },
 });
 
-const emit = defineEmits(["update:modelValue", "approved"]);
+const emit = defineEmits(["update:modelValue", "approved", "cancelled"]);
 
 const checking = ref(false);
+const cancelling = ref(false);
 
 const show = computed({
 	get: () => props.modelValue,
@@ -120,6 +129,36 @@ const statusResource = createResource({
 	url: "nextend.sales_approval.pos_next_bridge.get_pos_approval_status",
 	auto: false,
 });
+
+const cancelResource = createResource({
+	url: "nextend.sales_approval.pos_next_bridge.cancel_held_transaction",
+	auto: false,
+});
+
+/**
+ * Walking away from this dialog would otherwise strand the draft in the
+ * approval queue forever — the customer has left, but an approver still sees
+ * a decision to make on a sale that is never going to happen.
+ */
+async function cancelTransaction() {
+	if (!props.info?.name) return;
+
+	const confirmed = window.confirm(
+		__("Batalkan transaksi {0}? Draft dan permintaan approval-nya akan dihapus.", [
+			props.info.name,
+		])
+	);
+	if (!confirmed) return;
+
+	cancelling.value = true;
+	try {
+		await cancelResource.submit({ invoice_name: props.info.name });
+		emit("cancelled", props.info.name);
+		close();
+	} finally {
+		cancelling.value = false;
+	}
+}
 
 async function checkStatus() {
 	if (!props.info?.name) return;

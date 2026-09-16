@@ -505,7 +505,54 @@
 
 							<!-- REVIEW MODE: Full payment method cards (when not in entry mode) -->
 							<div v-else class="flex flex-col gap-4 md:gap-5">
-								<div
+								<!-- Sales approval holds (nextend) -->
+				<div
+					v-if="heldApprovals.count > 0"
+					class="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3"
+				>
+					<div class="flex items-start gap-2">
+						<FeatherIcon name="clock" class="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+						<div class="min-w-0 flex-1">
+							<p class="text-sm font-bold text-amber-900">
+								{{
+									__("{0} transaksi menunggu approval — {1}", [
+										heldApprovals.count,
+										formatCurrency(heldApprovals.total),
+									])
+								}}
+							</p>
+							<p class="mt-0.5 text-xs text-amber-800">
+								{{
+									__(
+										"Uangnya sudah ada di laci, tetapi penjualannya BELUM masuk hitungan shift ini. Kalau setoran tunai Anda lebih dari yang diharapkan, kemungkinan besar sebesar inilah selisihnya."
+									)
+								}}
+							</p>
+							<ul class="mt-2 space-y-1">
+								<li
+									v-for="row in heldApprovals.rows"
+									:key="row.invoice"
+									class="flex justify-between gap-3 text-xs text-amber-700"
+								>
+									<span class="truncate">
+										{{ row.invoice }} · {{ row.customer }} ·
+										{{ __("menunggu") }} {{ row.pending_role }}
+									</span>
+									<span class="shrink-0 font-medium">{{ formatCurrency(row.grand_total) }}</span>
+								</li>
+							</ul>
+							<p class="mt-2 text-xs text-amber-700">
+								{{
+									__(
+										"Transaksi ini TIDAK akan terhapus saat shift ditutup dan tetap bisa disetujui setelahnya."
+									)
+								}}
+							</p>
+						</div>
+					</div>
+				</div>
+
+				<div
 									v-for="(payment, idx) in closingData.payment_reconciliation"
 									:key="idx"
 									:class="[
@@ -971,7 +1018,7 @@
 </template>
 
 <script setup>
-import { Button, Dialog, FeatherIcon, Input } from "frappe-ui";
+import { Button, Dialog, FeatherIcon, Input, createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useShift, shiftState } from "../composables/useShift";
@@ -1010,6 +1057,34 @@ const { hideExpectedAmount } = storeToRefs(posSettingsStore);
 const shiftStore = usePOSShiftStore();
 
 const closingData = ref(null);
+
+/**
+ * Sales from this shift still parked in the approval queue (nextend).
+ *
+ * Shown, never blocking. Their cash is already in the drawer but the invoices
+ * are drafts, so nothing counts them — the drawer reads as a surplus with no
+ * explanation. Naming the amount lets whoever reconciles it match the
+ * difference to a concrete list instead of guessing.
+ */
+const heldApprovals = ref({ count: 0, total: 0, rows: [] });
+
+const heldApprovalsResource = createResource({
+	url: "nextend.sales_approval.pos_next_bridge.get_shift_held_summary",
+	auto: false,
+});
+
+async function loadHeldApprovals() {
+	try {
+		const result = await heldApprovalsResource.submit({
+			pos_opening_shift: props.openingShift,
+		});
+		heldApprovals.value = result?.message || result || { count: 0, total: 0, rows: [] };
+	} catch (error) {
+		// Advisory panel only — a failure here must not stop a shift closing.
+		console.debug("Held approval summary unavailable:", error);
+		heldApprovals.value = { count: 0, total: 0, rows: [] };
+	}
+}
 const closingDataResource = getClosingShiftData;
 const submitResource = submitClosingShift;
 const showInvoiceDetails = ref(false);
@@ -1035,6 +1110,7 @@ watch(open, async (isOpen) => {
 		// Refresh POS settings to get latest hideExpectedAmount value
 		await posSettingsStore.reloadSettings();
 		loadClosingData();
+		loadHeldApprovals();
 	} else {
 		// Resume the shift duration counter
 		shiftStore.shiftTimerPaused = false;

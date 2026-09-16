@@ -1394,6 +1394,59 @@
 				</div>
 			</div>
 
+			<!-- Sales Approval pre-check (nextend) -->
+			<div
+				v-if="approvalPreview.needs_approval"
+				class="mb-1.5 rounded-lg border border-amber-300 bg-amber-50 p-2.5"
+			>
+				<div class="flex items-start gap-2">
+					<svg
+						class="mt-0.5 h-4 w-4 shrink-0 text-amber-600"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+						stroke-width="2"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
+						/>
+					</svg>
+					<div class="min-w-0 flex-1">
+						<p class="text-xs font-bold text-amber-900">
+							{{ __("Perlu approval sebelum bisa diselesaikan") }}
+						</p>
+						<p class="mt-0.5 text-xs text-amber-800">
+							{{
+								__("Diskon terdalam {0}% — butuh persetujuan sampai {1}.", [
+									Number(approvalPreview.max_discount_percent).toFixed(2),
+									approvalPreview.required_role,
+								])
+							}}
+						</p>
+						<ul class="mt-1 space-y-0.5">
+							<li
+								v-for="line in approvalPreview.lines"
+								:key="line.item_code"
+								class="text-xs text-amber-700"
+							>
+								<span class="font-medium">{{ line.item_code }}</span>
+								· {{ Number(line.discount_percent).toFixed(2) }}%
+								· {{ line.tier_role }}
+							</li>
+						</ul>
+						<p class="mt-1 text-xs text-amber-700">
+							{{
+								__(
+									"Transaksi akan tersimpan sebagai draft dan struk belum bisa dicetak sampai disetujui."
+								)
+							}}
+						</p>
+					</div>
+				</div>
+			</div>
+
 			<!-- Grand Total -->
 			<div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-2.5 mb-1.5">
 				<div class="flex items-center justify-between">
@@ -1436,7 +1489,9 @@
 							d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
 						/>
 					</svg>
-					<span>{{ __("Checkout") }}</span>
+					<span>{{
+						approvalPreview.needs_approval ? __("Checkout (perlu approval)") : __("Checkout")
+					}}</span>
 				</button>
 
 				<!-- Hold Order Button (Secondary - 50% width) -->
@@ -1505,6 +1560,7 @@ import EditItemDialog from "./EditItemDialog.vue";
  * ============================================================================
  */
 const cartStore = usePOSCartStore(); // Pinia store for cart state management
+
 const settingsStore = usePOSSettingsStore(); // Pinia store for POS settings
 const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions
 const customerSearchStore = useCustomerSearchStore(); // Pinia store for customer search
@@ -1564,6 +1620,84 @@ const props = defineProps({
 		type: Array,
 		default: () => [],
 	},
+});
+
+/**
+ * ============================================================================
+ * SALES APPROVAL PRE-CHECK (nextend)
+ * ============================================================================
+ * A sale priced below the item's selling price is held for approval at submit
+ * time. Without this pre-check the cashier only discovers that AFTER taking
+ * the customer's money, which is the worst possible moment to find out.
+ *
+ * Purely advisory: the authoritative decision is still made server-side when
+ * the invoice is submitted. If this call fails or the app is absent, checkout
+ * behaves exactly as before.
+ */
+const EMPTY_APPROVAL_PREVIEW = { needs_approval: false, lines: [], required_role: "" };
+const APPROVAL_CHECK_DEBOUNCE_MS = 400;
+
+const approvalPreview = ref({ ...EMPTY_APPROVAL_PREVIEW });
+let _approvalCheckTimer = null;
+
+const approvalCheckResource = createResource({
+	url: "nextend.sales_approval.pos_next_bridge.check_cart_approval",
+	auto: false,
+});
+
+async function runApprovalCheck() {
+	if (!props.items?.length || isOffline()) {
+		// Offline, the cashier cannot be told anything reliable: the price
+		// list and tier config both live on the server. The sale still goes
+		// through and joins the queue on sync.
+		approvalPreview.value = { ...EMPTY_APPROVAL_PREVIEW };
+		return;
+	}
+
+	try {
+		const payload = props.items.map((item) => ({
+			item_code: item.item_code,
+			qty: item.quantity ?? item.qty ?? 0,
+			rate: item.rate ?? 0,
+			price_list_rate: item.price_list_rate ?? item.rate ?? 0,
+			discount_percentage: item.discount_percentage ?? 0,
+			discount_amount: item.discount_amount ?? 0,
+			pricing_rules: item.pricing_rules ?? null,
+			uom: item.uom ?? null,
+		}));
+
+		const result = await approvalCheckResource.submit({
+			items: JSON.stringify(payload),
+			pos_profile: props.posProfile,
+			additional_discount: props.discountAmount || 0,
+		});
+
+		approvalPreview.value = result?.message || result || { ...EMPTY_APPROVAL_PREVIEW };
+	} catch (error) {
+		// Advisory only — never block checkout because the hint failed.
+		log.debug("Sales approval pre-check failed:", error);
+		approvalPreview.value = { ...EMPTY_APPROVAL_PREVIEW };
+	}
+}
+
+function scheduleApprovalCheck() {
+	if (_approvalCheckTimer) clearTimeout(_approvalCheckTimer);
+	_approvalCheckTimer = setTimeout(runApprovalCheck, APPROVAL_CHECK_DEBOUNCE_MS);
+}
+
+watch(
+	// Only the figures the tier calculation reads. Watching the whole array
+	// would re-query the server on every unrelated keystroke in the cart.
+	() =>
+		(props.items || [])
+			.map((i) => `${i.item_code}:${i.quantity ?? i.qty}:${i.rate}:${i.price_list_rate}`)
+			.join("|") + `#${props.discountAmount || 0}`,
+	scheduleApprovalCheck,
+	{ immediate: true }
+);
+
+onBeforeUnmount(() => {
+	if (_approvalCheckTimer) clearTimeout(_approvalCheckTimer);
 });
 
 /**

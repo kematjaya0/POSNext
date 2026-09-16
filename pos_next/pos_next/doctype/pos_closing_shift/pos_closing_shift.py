@@ -175,8 +175,34 @@ class POSClosingShift(Document):
 				as_dict=1,
 			)
 
+			held = self._invoices_awaiting_approval()
+
 			for invoice in data:
+				# A sale parked in an approval queue is a draft too, but it is
+				# not abandoned - the customer already paid for it and someone
+				# upstream still has to decide on it. Deleting it here would
+				# destroy a paid transaction at shift close, silently.
+				if invoice.name in held:
+					continue
+
 				frappe.delete_doc(doctype, invoice.name, force=1)
+
+	def _invoices_awaiting_approval(self) -> set:
+		"""Sales Invoice names held by an undecided approval request.
+
+		Empty set when the approval app (nextend) is not installed, so this
+		controller keeps working on benches without it.
+		"""
+		if not frappe.db.table_exists("Sales Approval Request"):
+			return set()
+
+		return set(
+			frappe.get_all(
+				"Sales Approval Request",
+				filters={"sales_doctype": "Sales Invoice", "docstatus": 0, "status": "Pending"},
+				pluck="sales_docname",
+			)
+		)
 
 	@frappe.whitelist()
 	def get_payment_reconciliation_details(self):

@@ -564,6 +564,14 @@
 				@return-created="handleReturnCreated"
 			/>
 
+			<!-- Sales Approval Dialog (nextend) -->
+			<ApprovalPendingDialog
+				v-model="showApprovalDialog"
+				:info="approvalInfo"
+				@approved="handleApprovalCompleted"
+				@cancelled="handleApprovalCancelled"
+			/>
+
 			<!-- Coupon Dialog -->
 			<CouponDialog
 				v-model="uiStore.showCouponDialog"
@@ -1032,6 +1040,7 @@ import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 import POSFooter from "@/components/common/POSFooter.vue";
 import ManagementSlider from "@/components/pos/ManagementSlider.vue";
 import POSHeader from "@/components/pos/POSHeader.vue";
+import ApprovalPendingDialog from "@/components/sale/ApprovalPendingDialog.vue";
 import BatchSerialDialog from "@/components/sale/BatchSerialDialog.vue";
 import CouponDialog from "@/components/sale/CouponDialog.vue";
 import CreateCustomerDialog from "@/components/sale/CreateCustomerDialog.vue";
@@ -1073,6 +1082,82 @@ import { qzConnected, connect as qzConnect, disconnect as qzDisconnect } from "@
 import { Button, Dialog, createResource } from "frappe-ui";
 import { call } from "@/utils/apiWrapper";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+
+/**
+ * Sales approval (nextend) — a sale below the item's selling price is held as a
+ * draft until the jenjang (Kepala Toko → Manager Pembelian → CEO) signs off.
+ */
+const showApprovalDialog = ref(false);
+const approvalInfo = ref({});
+
+/**
+ * Server pushes the verdict so the cashier does not have to keep pressing
+ * "Cek Status" while a customer waits. Same transport the stock updates use
+ * (window.frappe.realtime); the button stays as a manual fallback for when
+ * the socket is not connected.
+ */
+const APPROVAL_EVENT = "nextend_sales_approval_update";
+
+function handleApprovalRealtime(payload) {
+	// Only react to the sale this till is actually holding — the event is
+	// addressed to the user, and one cashier can have several tills open.
+	if (!payload?.invoice || payload.invoice !== approvalInfo.value?.name) return;
+
+	if (payload.status === "Approved") {
+		showApprovalDialog.value = false;
+		handleApprovalCompleted(payload.invoice);
+		return;
+	}
+
+	if (payload.status === "Rejected") {
+		approvalInfo.value = {
+			...approvalInfo.value,
+			approval_rejected: true,
+			rejection_reason: payload.rejection_reason,
+		};
+		showWarning(__("Approval untuk {0} ditolak.", [payload.invoice]));
+	}
+}
+
+onMounted(() => {
+	window.frappe?.realtime?.on(APPROVAL_EVENT, handleApprovalRealtime);
+});
+
+onUnmounted(() => {
+	window.frappe?.realtime?.off(APPROVAL_EVENT, handleApprovalRealtime);
+});
+
+/**
+ * The cashier gave up waiting. The draft and its approval request are gone
+ * server-side, so the till returns to a clean cart.
+ */
+function handleApprovalCancelled(invoiceName) {
+	cartStore.clearCart();
+	previousCartHash = "";
+	showWarning(__("Transaksi {0} dibatalkan.", [invoiceName]));
+}
+
+/**
+ * Fired when the cashier polls "Cek Status" and the document has since been
+ * approved and auto-submitted. At that point the sale really is complete, so
+ * the cart can be cleared and the receipt printed.
+ */
+async function handleApprovalCompleted(invoiceName) {
+	cartStore.clearCart();
+	previousCartHash = "";
+
+	try {
+		await handlePrintInvoice({ name: invoiceName });
+		showSuccess(__("Approval selesai. Invoice {0} dicetak.", [invoiceName]));
+	} catch (error) {
+		log.error("Approval print error:", error);
+		showWarning(__("Approval selesai untuk {0}, tetapi cetak gagal.", [invoiceName]));
+	}
+
+	loadInvoiceHistoryData().catch((err) =>
+		log.debug("Background invoice cache refresh failed:", err)
+	);
+}
 import { useToast } from "@/composables/useToast";
 
 import { useCustomerSearchStore } from "@/stores/customerSearch";
@@ -2201,6 +2286,20 @@ async function handlePaymentCompleted(paymentData) {
 				isCreditSale: Boolean(paymentData.is_credit_sale),
 				receivableAccount: paymentData.receivable_account || null,
 			});
+
+			// The sale is priced below the item's selling price and is parked in
+			// the approval queue by nextend (see sales_approval/pos_next_bridge.py).
+			// The invoice exists only as a DRAFT: no stock moved, no payment is
+			// final, so this must not fall through to the success/print path.
+			if (result?.requires_approval) {
+				approvalInfo.value = { ...result };
+				showApprovalDialog.value = true;
+				uiStore.showPaymentDialog = false;
+				// The cart is deliberately left intact: if the approver rejects,
+				// the cashier has to reprice the same basket, and rebuilding it
+				// from scratch at a busy counter is worse than clearing it.
+				return;
+			}
 
 			if (result) {
 				uiStore.clearLastOfflinePrintDoc();

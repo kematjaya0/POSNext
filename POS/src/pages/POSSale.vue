@@ -384,6 +384,7 @@
 								:discount-amount="cartStore.totalDiscount"
 								:grand-total="cartStore.grandTotal"
 								:pos-profile="shiftStore.profileName"
+								:company="shiftStore.profileCompany"
 								:currency="shiftStore.profileCurrency"
 								:applied-offers="cartStore.appliedOffers"
 								:warehouses="profileWarehouses"
@@ -1243,14 +1244,18 @@ let previousCartHash = "";
 // whenever the edit is abandoned (cart cleared without checkout).
 let editingOfflineContext = null;
 
-// Helper function to compute cart hash
+// Structural cart hash for the offer re-apply watcher.
+// Do NOT include rate / discount_% / discount_amount: apply_offers and
+// coupon revalidation write those fields, which would re-trigger this
+// watcher and flicker "offer removed / offer applied" in a loop.
 function computeCartHash() {
 	return cartStore.invoiceItems
+		.filter((i) => !i.is_free_item)
 		.map(
 			(i) =>
-				`${i.item_code}-${i.quantity}-${i.rate}-${i.discount_percentage || 0}-${
-					i.discount_amount || 0
-				}-${i.uom || ""}-${i.warehouse || ""}`
+				`${i.item_code}-${i.quantity}-${i.price_list_rate || 0}-${i.uom || ""}-${
+					i.warehouse || ""
+				}`
 		)
 		.join("|");
 }
@@ -1616,13 +1621,8 @@ watch(
 	}
 );
 
-// Watch for cart changes to re-apply offers
-// Comprehensive watcher that detects all cart changes including:
-// - Items added/removed (length changes)
-// - Quantity changes
-// - Rate/price changes
-// - Discount changes
-// - Item properties that affect offers
+// Watch for structural cart changes to re-validate applied offers.
+// Qty / item / warehouse / list price only — not offer/coupon discounts.
 watch(
 	() => computeCartHash(),
 	(newHash) => {
@@ -2083,7 +2083,7 @@ function handleEditCustomer(customer) {
 	uiStore.showCreateCustomerDialog = true;
 }
 
-function handleProceedToPayment() {
+async function handleProceedToPayment() {
 	if (cartStore.isEmpty) {
 		showWarning(__("Please add items to cart before proceeding to payment"));
 		return;
@@ -2094,6 +2094,21 @@ function handleProceedToPayment() {
 		showWarning(__("Please select a customer before proceeding"));
 		uiStore.showCustomerDialog = true;
 		pendingPaymentAfterCustomer.value = true;
+		return;
+	}
+
+	try {
+		const changed = await cartStore.revalidateOffers();
+		if (changed) {
+			showWarning(__("Offers were updated. please review the total before taking payment"));
+		}
+	} catch (error) {
+		console.error("Failed to revalidate offers before payment:", error);
+	}
+
+	cartStore.dropOutOfStockFreeItems();
+	if (cartStore.isEmpty) {
+		showWarning(__("Please add items to cart before proceeding to payment"));
 		return;
 	}
 

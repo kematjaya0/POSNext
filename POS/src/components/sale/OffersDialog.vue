@@ -111,9 +111,13 @@
 								>
 									<div class="text-lg font-bold">
 										<span v-if="offer.discount_percentage">{{
-											__("{0}% OFF", [
-												Number(offer.discount_percentage).toFixed(2),
-											])
+											offer.promotion_type === 'GWP'
+												? __("{0}% per free items", [
+														Number(offer.discount_percentage).toFixed(2),
+												  ])
+												: __("{0}% OFF", [
+														Number(offer.discount_percentage).toFixed(2),
+												  ])
 										}}</span>
 										<span v-else-if="offer.discount_amount">{{
 											__("{0} OFF", [formatCurrency(offer.discount_amount)])
@@ -125,7 +129,11 @@
 									v-if="offer.offer === 'Give Product'"
 									class="text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-semibold"
 								>
-									{{ __("+ Free Item") }}
+									{{
+										offer.promotion_type === 'GWP'
+											? __("+ {0} Free", [offer.free_qty || 1])
+											: __("+ Free Item")
+									}}
 								</div>
 							</div>
 
@@ -228,11 +236,10 @@
 								</div>
 							</div>
 
-							<!-- Progress Bar for Min Amount (only shown if not eligible) -->
 							<div
 								v-if="
 									offer.min_amt &&
-									offersStore.cartSnapshot.subtotal < offer.min_amt
+									offersStore.getEligibleItemAmount(offer) < offer.min_amt
 								"
 								class="mt-3"
 							>
@@ -241,7 +248,10 @@
 										__("Subtotal (before tax)")
 									}}</span>
 									<span class="text-gray-900 font-semibold">
-										{{ formatCurrency(offersStore.cartSnapshot.subtotal) }} /
+										{{
+											formatCurrency(offersStore.getEligibleItemAmount(offer))
+										}}
+										/
 										{{ formatCurrency(offer.min_amt) }}
 									</span>
 								</div>
@@ -250,7 +260,7 @@
 										class="bg-green-600 h-2 rounded-full transition-all"
 										:style="{
 											width: `${Math.min(
-												(offersStore.cartSnapshot.subtotal /
+												(offersStore.getEligibleItemAmount(offer) /
 													offer.min_amt) *
 													100,
 												100

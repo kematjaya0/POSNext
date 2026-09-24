@@ -25,15 +25,37 @@ from collections import defaultdict
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cstr, flt
 
 from erpnext.accounts.doctype.pricing_rule.pricing_rule import (
 	apply_price_discount_rule as _original_apply_price_discount_rule,
 )
 from erpnext.accounts.doctype.pricing_rule.utils import get_applied_pricing_rules
 
+from pos_next.promotions.schedule import (
+	FROM_TIME_FIELD,
+	MIDNIGHT,
+	TO_TIME_FIELD,
+	schedule_fields_available,
+)
+from pos_next.promotions.scope import (
+	APPLY_ON_CHILD_DOCTYPE,
+	SCOPE_PERCENTAGE_FIELD,
+	get_scope_config,
+)
+
 # Values of the ``apply_discount_on_price`` custom field that trigger ranking.
 MIN_MAX_OPTIONS = ("Min", "Max")
+
+# Sums per-scope percentages across the cart instead of ranking lines. Applied by
+# pos_next.promotions.engine during apply_offers, not by this module.
+ACCUMULATIVE_MODE = "Accumulative"
+
+# Every cross-cart mode the ``apply_discount_on_price`` field can hold.
+CROSS_CART_MODES = (*MIN_MAX_OPTIONS, ACCUMULATIVE_MODE)
+
+PROMOTION_TYPE_ITEM_LEVEL = "Item Level Discount"
+PROMOTION_TYPE_GIFT_POOL = "Gift Pool"
 
 
 def _has_pos_only_column():
@@ -62,24 +84,102 @@ def _has_pos_only_column():
 	return result
 
 
-def sync_pos_only_to_pricing_rules(doc, method=None):
+def sync_promotion_fields_to_pricing_rules(doc, method=None):
 	"""Sync POS Next custom flags from Promotional Scheme to its generated Pricing Rules.
 
 	Called via doc_events on_update hook, which runs after ERPNext's
 	PromotionalScheme.on_update() has already created/updated the Pricing Rules.
 
-	Propagates both ``pos_only`` and ``one_time_per_customer`` so a scheme acts as
-	the single source of truth for the rules it generates.
+	Propagates ``pos_only``, ``one_time_per_customer``, and ``promotion_type`` so a
+	scheme acts as the single source of truth for the rules it generates.
+	Also syncs GWP slab field ``gwp_paid_qty_basis``.
 	"""
+	values = {
+		"pos_only": doc.get("pos_only") or 0,
+		"one_time_per_customer": doc.get("one_time_per_customer") or 0,
+	}
+	if frappe.db.has_column("Pricing Rule", "promotion_type"):
+		values["promotion_type"] = doc.get("promotion_type") or ""
+
+	if schedule_fields_available():
+		values[FROM_TIME_FIELD] = doc.get(FROM_TIME_FIELD) or MIDNIGHT
+		values[TO_TIME_FIELD] = doc.get(TO_TIME_FIELD) or MIDNIGHT
+
 	frappe.db.set_value(
 		"Pricing Rule",
 		{"promotional_scheme": doc.name},
-		{
-			"pos_only": doc.get("pos_only") or 0,
-			"one_time_per_customer": doc.get("one_time_per_customer") or 0,
-		},
+		values,
 		update_modified=False,
 	)
+
+	sync_scope_percentages_to_pricing_rules(doc)
+
+	# GWP rules discount the purchased line(s), so same_item must stay 1.
+	# Non-GWP product discounts must keep the slab's same_item / free_item as configured.
+	if frappe.db.has_column("Pricing Rule", "gwp_paid_qty_basis"):
+		from pos_next.api.gwp import GWP_BASIS_MAX
+
+		is_gwp = doc.get("promotion_type") == "GWP"
+		for slab in doc.get("product_discount_slabs") or []:
+			values = {
+				"gwp_paid_qty_basis": slab.get("gwp_paid_qty_basis") or GWP_BASIS_MAX,
+			}
+			if is_gwp:
+				values["same_item"] = 1
+			frappe.db.set_value(
+				"Pricing Rule",
+				{"promotional_scheme_id": slab.name},
+				values,
+				update_modified=False,
+			)
+
+
+def sync_scope_percentages_to_pricing_rules(doc):
+	"""Copy per-scope ``pos_discount_percentage`` rows from Scheme to its Pricing Rules.
+
+	ERPNext rebuilds each rule's scope table with
+	``pr.append(field, {apply_on: d.get(apply_on), "uom": d.uom})``
+	(promotional_scheme.py), so custom columns on those rows are dropped every
+	time the scheme is saved. We re-apply them here, matching rows by their scope
+	value, which is unique within a rule.
+	"""
+	scope = get_scope_config(doc.get("apply_on"))
+	if not scope:
+		return
+
+	table_field, row_field = scope
+	child_doctype = APPLY_ON_CHILD_DOCTYPE[doc.get("apply_on")]
+
+	if not frappe.db.has_column(child_doctype, SCOPE_PERCENTAGE_FIELD):
+		return
+
+	percentages = {
+		row.get(row_field): flt(row.get(SCOPE_PERCENTAGE_FIELD))
+		for row in (doc.get(table_field) or [])
+		if row.get(row_field)
+	}
+	if not any(percentages.values()):
+		return
+
+	rule_names = frappe.get_all("Pricing Rule", filters={"promotional_scheme": doc.name}, pluck="name")
+	if not rule_names:
+		return
+
+	for row in frappe.get_all(
+		child_doctype,
+		filters={"parent": ["in", rule_names], "parenttype": "Pricing Rule"},
+		fields=["name", row_field],
+	):
+		percentage = percentages.get(row.get(row_field))
+		if percentage is None:
+			continue
+		frappe.db.set_value(
+			child_doctype, row.name, SCOPE_PERCENTAGE_FIELD, percentage, update_modified=False
+		)
+
+
+# Backwards-compatible alias for any external references.
+sync_pos_only_to_pricing_rules = sync_promotion_fields_to_pricing_rules
 
 
 def patch_get_other_conditions(pr_utils):
@@ -118,63 +218,448 @@ def patch_get_other_conditions(pr_utils):
 # ---------------------------------------------------------------------------
 
 
-def enforce_min_max_pricing_config(doc, method=None):
-	"""Validate-time guard for Min/Max price rules.
+def validate_unique_promotion_type_per_item(doc, method=None):
+	"""Block duplicate promotion_type for the same item on active Promotional Schemes."""
+	if doc.doctype != "Promotional Scheme":
+		return
+	if doc.get("disable"):
+		return
+	if not frappe.db.has_column("Promotional Scheme", "promotion_type"):
+		return
 
-	A Min/Max ("cheapest / most expensive item") discount only makes sense when the
-	engine evaluates the whole document together, so we force ``mixed_conditions``
-	on (ERPNext otherwise gates each line independently and a one-of-each cart never
-	qualifies). The quantity limit may be ``0`` (discount every unit of the cheapest /
-	most expensive line).
+	promotion_type = (doc.get("promotion_type") or "").strip()
+	if not promotion_type:
+		return
+	if doc.get("apply_on") != "Item Code":
+		return
 
-	Wired as a ``validate`` doc_event for both **Promotional Scheme** (Min/Max lives
-	on the price-discount slabs and the generated rules inherit ``mixed_conditions``)
-	and **Pricing Rule** (standalone or scheme-generated).
+	item_codes = list({row.item_code for row in (doc.get("items") or []) if row.get("item_code")})
+	if not item_codes:
+		return
+
+	scheme = frappe.qb.DocType("Promotional Scheme")
+	item_table = frappe.qb.DocType("Pricing Rule Item Code")
+
+	query = (
+		frappe.qb.from_(scheme)
+		.join(item_table)
+		.on(item_table.parent == scheme.name)
+		.select(scheme.name, item_table.item_code)
+		.where(scheme.disable == 0)
+		.where(scheme.promotion_type == promotion_type)
+		.where(scheme.company == doc.company)
+		.where(scheme.apply_on == "Item Code")
+		.where(item_table.item_code.isin(item_codes))
+	)
+
+	if doc.name and not doc.is_new():
+		query = query.where(scheme.name != doc.name)
+
+	conflicts = query.run(as_dict=True)
+	if not conflicts:
+		return
+
+	seen = set()
+	lines = []
+	for row in conflicts:
+		key = (row.item_code, row.name)
+		if key in seen:
+			continue
+		seen.add(key)
+		lines.append(
+			_("{0} already has promotion type {1} in scheme {2}").format(
+				frappe.bold(row.item_code),
+				frappe.bold(promotion_type),
+				frappe.bold(row.name),
+			)
+		)
+
+	frappe.throw(
+		_("A promotion with the same type already exists for the following item(s):<br><br>")
+		+ "<br>".join(lines),
+		title=_("Duplicate Promotion"),
+	)
+
+
+# Slab fields an Accumulative scheme authors on the parent instead. Parent
+# fieldname -> slab fieldname (they differ for the amount pair).
+ACCUMULATIVE_PARENT_TO_SLAB = {
+	"min_qty": "min_qty",
+	"max_qty": "max_qty",
+	"min_amount": "min_amount",
+	"max_amount": "max_amount",
+	"max_accumulated_discount_percentage": "max_accumulated_discount_percentage",
+	"min_scopes_required": "min_scopes_required",
+}
+
+
+def normalize_accumulative_scheme(doc, method=None):
+	"""Derive the canonical price discount slab from the parent's accumulative config.
+
+	``pos_is_accumulative`` is an *authoring* control only. ``apply_discount_on_price``
+	on the generated Pricing Rule stays the single source of truth for the engine,
+	the offer payload and the interaction matrix — this function projects the
+	checkbox onto it. Running on every ``validate`` means the two can never drift,
+	and a scheme created through the API, a fixture or ``create_promotion`` ends up
+	exactly as correct as one built in the form.
+
+	ERPNext generates Pricing Rules *from the slabs* (``get_pricing_rules`` skips an
+	empty child table), so a hidden slab table must still contain a row or the
+	scheme would save clean and silently discount nothing.
+
+	Wired to ``before_validate``: ERPNext's own ``PromotionalScheme.validate()``
+	rejects a scheme with no discount slabs, and that class method runs ahead of
+	every hooked ``validate``, so the row must already exist by then.
 	"""
-	if doc.doctype == "Promotional Scheme":
-		min_max_slabs = [
-			slab
-			for slab in (doc.get("price_discount_slabs") or [])
-			if slab.get("apply_discount_on_price") in MIN_MAX_OPTIONS
-		]
-		if not min_max_slabs:
-			return
-		doc.mixed_conditions = 1
-		for slab in min_max_slabs:
-			if flt(slab.get("min_or_max_discount_qty_limit")) < 0:
+	if doc.doctype != "Promotional Scheme":
+		return
+	if not frappe.db.has_column("Promotional Scheme", "pos_is_accumulative"):
+		return
+	if not doc.get("pos_is_accumulative"):
+		return
+
+	slab = _resolve_accumulative_slab(doc)
+
+	# Injected because each value is *true* for this mode, not to dodge validation:
+	# it is a price discount, expressed as a percentage, whose percentage lives on
+	# the scope rows. rule_description is the slab's only mandatory field.
+	slab.apply_discount_on_price = ACCUMULATIVE_MODE
+	slab.rate_or_discount = "Discount Percentage"
+	slab.rate = 0
+	slab.discount_amount = 0
+	slab.discount_percentage = 0
+	if not slab.get("rule_description"):
+		slab.rule_description = _("Accumulative discount")
+
+	for parent_field, slab_field in ACCUMULATIVE_PARENT_TO_SLAB.items():
+		slab.set(slab_field, doc.get(parent_field) or 0)
+
+	if flt(slab.min_scopes_required) < 1:
+		slab.min_scopes_required = 1
+
+	doc.mixed_conditions = 1
+	doc.pos_only = 1
+	if not doc.get("promotion_type"):
+		doc.promotion_type = PROMOTION_TYPE_ITEM_LEVEL
+
+
+def normalize_gift_pool_scheme(doc, method=None):
+	"""Pin Gift Pool schemes to Item Group product discounts.
+
+	ERPNext only generates a Pricing Rule from a product/price slab, so this
+	keeps exactly one product-discount row whose ``free_item`` is the first
+	pool SKU. ``apply_offers`` ignores that single free item and grants from
+	the ordered pool instead.
+	"""
+	if doc.doctype != "Promotional Scheme":
+		return
+	if cstr(doc.get("promotion_type") or "") != PROMOTION_TYPE_GIFT_POOL:
+		return
+
+	from pos_next.api.gift_pool import group_gift_pool_free_qty, group_gift_pool_items
+
+	doc.apply_on = "Item Group"
+	doc.mixed_conditions = 1
+	doc.pos_only = 1
+	doc.selling = 1
+	if doc.get("pos_is_accumulative"):
+		doc.pos_is_accumulative = 0
+
+	pools = group_gift_pool_items(doc.get("gift_pool_items") or [])
+	first_free_item = next((codes[0] for codes in pools.values() if codes), None)
+	first_free_qty = next(iter(group_gift_pool_free_qty(doc.get("gift_pool_items") or []).values()), 1)
+
+	_sync_gift_pool_scheme_item_groups(doc, list(pools.keys()))
+
+	slab = _resolve_gift_pool_slab(doc)
+	slab.rule_description = slab.get("rule_description") or _("Gift Pool")
+	if not flt(slab.min_qty):
+		slab.min_qty = 1
+	slab.free_qty = first_free_qty
+	slab.same_item = 0
+	slab.free_item_rate = 0
+	if first_free_item:
+		slab.free_item = first_free_item
+
+
+def _resolve_gift_pool_slab(doc):
+	"""The one product discount row a Gift Pool scheme owns, created if absent."""
+	slabs = doc.get("product_discount_slabs") or []
+	if len(slabs) > 1:
+		frappe.throw(
+			_(
+				"A <b>Gift Pool</b> scheme uses a single product discount row, but this "
+				"scheme has {0}. Remove the extra rows."
+			).format(len(slabs)),
+			title=_("Too Many Product Discount Rows"),
+		)
+	if slabs:
+		return slabs[0]
+	return doc.append("product_discount_slabs", {})
+
+
+def _sync_gift_pool_scheme_item_groups(doc, item_groups):
+	"""Keep apply-on Item Groups in lockstep with the Gift Pool rows.
+
+	The Item Groups table is hidden on Gift Pool schemes; ERPNext still needs
+	it to generate the Pricing Rule scope.
+	"""
+	desired = [cstr(group) for group in (item_groups or []) if cstr(group)]
+	current = [
+		cstr(row.get("item_group"))
+		for row in (doc.get("item_groups") or [])
+		if cstr(row.get("item_group"))
+	]
+	if current == desired:
+		return
+	doc.set("item_groups", [])
+	for group in desired:
+		doc.append("item_groups", {"item_group": group})
+
+
+def validate_gift_pool_scheme(doc, method=None):
+	"""Authoring guards for Gift Pool: pool membership, no overlapping groups."""
+	if doc.doctype != "Promotional Scheme":
+		return
+	if cstr(doc.get("promotion_type") or "") != PROMOTION_TYPE_GIFT_POOL:
+		return
+	if doc.get("disable"):
+		return
+
+	from pos_next.api.gift_pool import (
+		expanded_groups,
+		group_gift_pool_items,
+		item_belongs_to_item_group,
+	)
+
+	pools = group_gift_pool_items(doc.get("gift_pool_items") or [])
+	if not pools:
+		frappe.throw(
+			_("Add at least one <b>free item</b> to the Gift Pool."),
+			title=_("Gift Pool"),
+		)
+
+	scheme_groups = list(pools.keys())
+	expanded_by_group = {group: expanded_groups(group) for group in scheme_groups}
+	for i, group_a in enumerate(scheme_groups):
+		for group_b in scheme_groups[i + 1 :]:
+			if expanded_by_group[group_a] & expanded_by_group[group_b]:
 				frappe.throw(
 					_(
-						"<b>Min/Max Discount Qty Limit</b> cannot be negative on the price "
-						"discount row using <b>{0}</b> discount. Use 0 for no limit."
-					).format(slab.get("apply_discount_on_price"))
+						"Gift Pool item groups <b>{0}</b> and <b>{1}</b> overlap. "
+						"Each group needs its own pool, so pick groups that do not contain each other."
+					).format(group_a, group_b),
+					title=_("Overlapping Item Groups"),
 				)
+
+	for item_group, item_codes in pools.items():
+		for item_code in item_codes:
+			if not item_belongs_to_item_group(item_code, item_group):
+				frappe.throw(
+					_(
+						"<b>{0}</b> is not in item group <b>{1}</b>. "
+						"Gift Pool free items must belong to the same group."
+					).format(item_code, item_group),
+					title=_("Gift Pool"),
+				)
+
+
+def _resolve_accumulative_slab(doc):
+	"""The one price discount row an Accumulative scheme owns, created if absent.
+
+	Kept to exactly one row: several would generate several identical Pricing
+	Rules, which ERPNext then reports as a MultiplePricingRuleConflict at the till.
+	"""
+	slabs = doc.get("price_discount_slabs") or []
+
+	conflicting = [s for s in slabs if s.get("apply_discount_on_price") in MIN_MAX_OPTIONS]
+	if conflicting:
+		frappe.throw(
+			_(
+				"A scheme cannot be <b>Accumulative</b> and use a <b>Min/Max</b> discount at "
+				"the same time. Remove the Min/Max price discount row, or clear "
+				"<b>Accumulative Discount</b>."
+			),
+			title=_("Conflicting Discount Modes"),
+		)
+
+	if len(slabs) > 1:
+		frappe.throw(
+			_(
+				"An <b>Accumulative</b> scheme uses a single price discount row, but this "
+				"scheme has {0}. Remove the extra rows — the qty and amount limits are set "
+				"on the scheme itself."
+			).format(len(slabs)),
+			title=_("Too Many Price Discount Rows"),
+		)
+
+	if slabs:
+		return slabs[0]
+
+	return doc.append("price_discount_slabs", {})
+
+
+def enforce_cross_cart_pricing_config(doc, method=None):
+	"""Validate-time guard for every cross-cart price mode.
+
+	All of them (``Min``, ``Max``, ``Accumulative``) need the engine to evaluate
+	the whole document together, so ``mixed_conditions`` is forced on — ERPNext
+	otherwise gates each line independently and a one-of-each cart never
+	qualifies.
+
+	Wired as a ``validate`` doc_event for both **Promotional Scheme** (the mode
+	lives on the price-discount slabs and the generated rules inherit
+	``mixed_conditions``) and **Pricing Rule** (standalone or scheme-generated).
+	"""
+	if doc.doctype == "Promotional Scheme":
+		slabs = [
+			slab
+			for slab in (doc.get("price_discount_slabs") or [])
+			if slab.get("apply_discount_on_price") in CROSS_CART_MODES
+		]
+		if slabs:
+			doc.mixed_conditions = 1
+			for slab in slabs:
+				mode = slab.get("apply_discount_on_price")
+				if mode in MIN_MAX_OPTIONS:
+					_validate_min_max_qty_limit(slab.get("min_or_max_discount_qty_limit"), mode, on_slab=True)
+				else:
+					_validate_accumulative_slab(slab)
+
+			if any(s.get("apply_discount_on_price") == ACCUMULATIVE_MODE for s in slabs):
+				_validate_accumulative_scope(doc)
+				doc.pos_only = 1
+
+		many_items_gwp = (
+			doc.get("apply_on") == "Item Group"
+			or (doc.get("apply_on") == "Item Code" and len(doc.get("items") or []) > 1)
+		) and doc.get("promotion_type") == "GWP" and (doc.get("product_discount_slabs") or [])
+		if many_items_gwp:
+			doc.mixed_conditions = 1
 		return
 
 	# Pricing Rule
-	if doc.get("apply_discount_on_price") not in MIN_MAX_OPTIONS:
+	mode = doc.get("apply_discount_on_price")
+	if mode not in CROSS_CART_MODES:
 		return
+
 	doc.mixed_conditions = 1
-	if flt(doc.get("min_or_max_discount_qty_limit")) < 0:
+	if mode in MIN_MAX_OPTIONS:
+		_validate_min_max_qty_limit(doc.get("min_or_max_discount_qty_limit"), mode, on_slab=False)
+		return
+
+	_validate_accumulative_slab(doc)
+
+	# Scope is validated on the *source* only. A scheme-generated rule is a
+	# derived artifact: ERPNext rebuilds its scope table from the scheme with
+	# only {value, uom}, dropping the percentages, and it saves the rule during
+	# the scheme's own on_update — before sync_scope_percentages_to_pricing_rules
+	# can put them back. Re-checking the copy here would reject every valid
+	# accumulative scheme. The scheme itself was already validated at its save.
+	if not doc.get("promotional_scheme"):
+		_validate_accumulative_scope(doc)
+
+	doc.pos_only = 1
+
+
+# Kept so any external reference to the old name keeps working.
+enforce_min_max_pricing_config = enforce_cross_cart_pricing_config
+
+
+def _validate_min_max_qty_limit(value, mode, on_slab):
+	if flt(value) >= 0:
+		return
+	if on_slab:
 		frappe.throw(
 			_(
-				"<b>Min/Max Discount Qty Limit</b> cannot be negative when "
-				"<b>Apply Discount On</b> is <b>{0}</b>. Use 0 for no limit."
-			).format(doc.get("apply_discount_on_price"))
+				"<b>Min/Max Discount Qty Limit</b> cannot be negative on the price "
+				"discount row using <b>{0}</b> discount. Use 0 for no limit."
+			).format(mode)
+		)
+	frappe.throw(
+		_(
+			"<b>Min/Max Discount Qty Limit</b> cannot be negative when "
+			"<b>Apply Discount On</b> is <b>{0}</b>. Use 0 for no limit."
+		).format(mode)
+	)
+
+
+def _validate_accumulative_slab(source):
+	"""Numeric config guards for an Accumulative slab / rule."""
+	if flt(source.get("max_accumulated_discount_percentage")) < 0:
+		frappe.throw(
+			_("<b>Max Accumulated Discount %</b> cannot be negative. Use 0 for no rule-level cap.")
+		)
+	if flt(source.get("min_scopes_required")) < 0:
+		frappe.throw(_("<b>Min Scopes Required</b> cannot be negative."))
+
+
+def _validate_accumulative_scope(doc):
+	"""Scope guards shared by Promotional Scheme and Pricing Rule.
+
+	An Accumulative discount sums a percentage per scope row, so it needs a
+	child-table scope (Item Code / Item Group / Brand) carrying at least one
+	positive percentage. ``Transaction`` has no rows to accumulate over.
+	"""
+	scope = get_scope_config(doc.get("apply_on"))
+	if not scope:
+		frappe.throw(
+			_(
+				"<b>Accumulative</b> discounts need <b>Apply On</b> set to "
+				"Item Code, Item Group or Brand — there is nothing to accumulate "
+				"over on a Transaction rule."
+			)
+		)
+
+	table_field, row_field = scope
+	rows = doc.get(table_field) or []
+	if not rows:
+		frappe.throw(
+			_("Add at least one <b>{0}</b> row before using an <b>Accumulative</b> discount.").format(
+				doc.get("apply_on")
+			)
+		)
+
+	percentages = [flt(row.get(SCOPE_PERCENTAGE_FIELD)) for row in rows]
+	if any(p < 0 for p in percentages):
+		frappe.throw(_("<b>Discount %</b> on a scope row cannot be negative."))
+	if not any(p > 0 for p in percentages):
+		frappe.throw(
+			_(
+				"Set <b>Discount %</b> on at least one <b>{0}</b> row - an "
+				"<b>Accumulative</b> discount sums those percentages."
+			).format(doc.get("apply_on"))
+		)
+
+	promotion_type = cstr(doc.get("promotion_type") or "").strip()
+	if promotion_type and promotion_type != PROMOTION_TYPE_ITEM_LEVEL:
+		frappe.throw(
+			_(
+				"<b>Accumulative</b> discounts must use promotion type "
+				"<b>{0}</b>, not <b>{1}</b>."
+			).format(PROMOTION_TYPE_ITEM_LEVEL, promotion_type)
 		)
 
 
 def apply_price_discount_rule(pricing_rule, item_details, args):
 	"""Override of ERPNext's ``apply_price_discount_rule`` (installed via monkey-patch).
 
-	For ``Min``/``Max`` rules we *defer* the discount: the per-item engine cannot
-	know which items are the cheapest/most expensive across the whole cart, so we
-	suppress application here and let :func:`apply_min_max_price_discounts` apply
-	it later. We still mirror the original's bookkeeping (``pricing_rule_for`` and
-	margin handling) so nothing else downstream changes.
+	Every cross-cart mode *defers* its discount, because the per-item engine cannot
+	make the decision on its own:
 
-	All non-Min/Max rules fall through to ERPNext's original implementation.
+	- ``Min`` / ``Max`` — it cannot rank items against each other, so the discount
+	  is applied later by :func:`apply_min_max_price_discounts`.
+	- ``Accumulative`` — the percentage comes from the scope rows present across the
+	  whole cart, not from the rule's own ``discount_percentage``. Letting ERPNext
+	  apply that field here would stack it underneath the accumulated total (a rule
+	  with 10% and rows of 5% + 3% produced 18% instead of 8%). The real percentage
+	  is applied by ``pos_next.promotions.engine``.
+
+	We still mirror the original's bookkeeping (``pricing_rule_for`` and margin
+	handling) so nothing else downstream changes. All other rules fall through to
+	ERPNext's original implementation.
 	"""
-	if (pricing_rule.get("apply_discount_on_price") or "") in MIN_MAX_OPTIONS:
+	if (pricing_rule.get("apply_discount_on_price") or "") in CROSS_CART_MODES:
 		# Keep parity with the original function's side effects.
 		item_details.pricing_rule_for = pricing_rule.get("rate_or_discount")
 

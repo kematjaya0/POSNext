@@ -52,6 +52,7 @@ doctype_js = {
 	"Customer": "public/js/customer.js",
 	"Pricing Rule": "public/js/pricing_rule.js",
 	"Promotional Scheme": "public/js/promotional_scheme.js",
+	"User": "public/js/user.js",
 }
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
@@ -135,7 +136,10 @@ before_uninstall = "pos_next.uninstall.before_uninstall"
 # ---------------
 # Override standard doctype classes
 
-override_doctype_class = {"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice"}
+override_doctype_class = {
+	"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice",
+	"Pricing Rule": "pos_next.overrides.custom_pricing_rule.CustomPricingRule",
+}
 
 # Document Events
 # ---------------
@@ -157,10 +161,13 @@ doc_events = {
 			"pos_next.api.wallet.validate_wallet_payment",
 			"pos_next.overrides.pricing_rule.apply_min_max_price_discounts",
 		],
+		"before_submit": "pos_next.authorization.gate.enforce_document",
 		"before_cancel": "pos_next.api.sales_invoice_hooks.before_cancel",
 		"on_submit": [
 			"pos_next.realtime_events.emit_stock_update_event",
 			"pos_next.api.wallet.process_loyalty_to_wallet",
+			"pos_next.api.magento_loyalty.redeem_magento_lp_on_submit",
+			"pos_next.api.magento_loyalty.add_magento_lp_on_submit",
 			"pos_next.api.sales_invoice_hooks.record_one_time_offer_usage",
 		],
 		"on_cancel": [
@@ -171,10 +178,22 @@ doc_events = {
 	},
 	"POS Profile": {"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event"},
 	"Promotional Scheme": {
-		"validate": "pos_next.overrides.pricing_rule.enforce_min_max_pricing_config",
-		"on_update": "pos_next.overrides.pricing_rule.sync_pos_only_to_pricing_rules",
+		"before_validate": [
+			"pos_next.promotions.schedule.normalize_schedule_fields",
+			"pos_next.overrides.pricing_rule.normalize_accumulative_scheme",
+			"pos_next.overrides.pricing_rule.normalize_gift_pool_scheme",
+		],
+		"validate": [
+			"pos_next.overrides.pricing_rule.enforce_cross_cart_pricing_config",
+			"pos_next.overrides.pricing_rule.validate_unique_promotion_type_per_item",
+			"pos_next.overrides.pricing_rule.validate_gift_pool_scheme",
+		],
+		"on_update": "pos_next.overrides.pricing_rule.sync_promotion_fields_to_pricing_rules",
 	},
-	"Pricing Rule": {"validate": "pos_next.overrides.pricing_rule.enforce_min_max_pricing_config"},
+	"Pricing Rule": {
+		"before_validate": "pos_next.promotions.schedule.normalize_schedule_fields",
+		"validate": "pos_next.overrides.pricing_rule.enforce_cross_cart_pricing_config",
+	},
 	"Sales Order": {"validate": "pos_next.overrides.pricing_rule.apply_min_max_price_discounts"},
 	"Quotation": {"validate": "pos_next.overrides.pricing_rule.apply_min_max_price_discounts"},
 	"Delivery Note": {"validate": "pos_next.overrides.pricing_rule.apply_min_max_price_discounts"},

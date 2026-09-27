@@ -33,8 +33,22 @@
 				@logout="uiStore.showLogoutDialog = true"
 			>
 				<template #menu-items>
+					<template v-if="shiftStore.isSpgMode">
+						<button
+							@click="showSpgOrdersDialog = true"
+							class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
+						>
+							<span>{{ __("Pesanan Saya") }}</span>
+						</button>
+						<button
+							@click="showSpgShiftDialog = true"
+							class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
+						>
+							<span>{{ __("Ganti Shift Kasir") }}</span>
+						</button>
+					</template>
 					<button
-						v-if="shiftStore.hasOpenShift"
+						v-if="shiftStore.hasOpenShift && !shiftStore.isSpgMode"
 						@click="uiStore.showOpenShiftDialog = true"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
 					>
@@ -379,6 +393,7 @@
 							<InvoiceCart
 								:items="cartStore.invoiceItems"
 								:customer="cartStore.customer"
+								:spg-mode="shiftStore.isSpgMode"
 								:subtotal="cartStore.subtotal"
 								:tax-amount="cartStore.totalTax"
 								:discount-amount="cartStore.totalDiscount"
@@ -486,17 +501,32 @@
 					<h3 class="mt-4 text-lg font-medium text-gray-900">
 						{{ __("Welcome to POS Next") }}
 					</h3>
-					<p class="mt-2 text-sm text-gray-500">
-						{{ __("Please open a shift to start making sales") }}
-					</p>
-					<Button
-						variant="solid"
-						theme="blue"
-						@click="uiStore.showOpenShiftDialog = true"
-						class="mt-6"
-					>
-						{{ __("Open Shift") }}
-					</Button>
+					<template v-if="shiftStore.isSpgMode">
+						<p class="mt-2 text-sm text-gray-500">
+							{{ __("Pilih shift kasir yang akan menerima pembayaran pesanan") }}
+						</p>
+						<Button
+							variant="solid"
+							theme="blue"
+							@click="showSpgShiftDialog = true"
+							class="mt-6"
+						>
+							{{ __("Pilih Shift Kasir") }}
+						</Button>
+					</template>
+					<template v-else>
+						<p class="mt-2 text-sm text-gray-500">
+							{{ __("Please open a shift to start making sales") }}
+						</p>
+						<Button
+							variant="solid"
+							theme="blue"
+							@click="uiStore.showOpenShiftDialog = true"
+							class="mt-6"
+						>
+							{{ __("Open Shift") }}
+						</Button>
+					</template>
 				</div>
 			</div>
 
@@ -533,6 +563,17 @@
 				v-model="uiStore.showCustomerDialog"
 				:pos-profile="shiftStore.profileName"
 				@customer-selected="handleCustomerSelected"
+			/>
+
+			<!-- SPG: pick the cashier shift orders are paid at (nextend POS Order) -->
+			<SpgShiftDialog
+				v-model="showSpgShiftDialog"
+				:current-shift-name="shiftStore.currentShift?.name"
+				@shift-selected="handleShiftOpened"
+			/>
+			<SpgOrdersDialog
+				v-model="showSpgOrdersDialog"
+				:currency="shiftStore.profileCurrency"
 			/>
 
 			<!-- Shift Opening Dialog -->
@@ -802,6 +843,7 @@
 						<div class="space-y-3 max-w-md mx-auto">
 							<!-- Recommended Action - BLUE -->
 							<button
+								v-if="!shiftStore.isSpgMode"
 								@click="logoutWithCloseShift"
 								:disabled="session.logout.loading"
 								class="w-full flex items-center justify-center px-5 py-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold rounded-lg shadow-lg hover:shadow-blue-500/30 transition-[background,box-shadow,opacity,transform] duration-200 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] active:scale-[0.98]"
@@ -1043,6 +1085,9 @@ let _posInitPromise = null;
 <script setup>
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
+import SpgOrdersDialog from "@/components/sale/SpgOrdersDialog.vue";
+import SpgShiftDialog from "@/components/sale/SpgShiftDialog.vue";
+import { printSpgOrderSlip } from "@/utils/printSpgOrder";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import SessionLockScreen from "@/components/common/SessionLockScreen.vue";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
@@ -1362,7 +1407,11 @@ const profileWarehouses = computed(() => {
 	return [];
 });
 
-const canAccessShiftActions = computed(() => shiftStore.hasOpenShift);
+// SPG runs on a cashier's shift: no drafts, returns, history or closing it.
+const canAccessShiftActions = computed(() => shiftStore.hasOpenShift && !shiftStore.isSpgMode);
+const showSpgShiftDialog = ref(false);
+const showSpgOrdersDialog = ref(false);
+const savingSpgOrder = ref(false);
 
 /** Desk link only for users with the Nexus POS Manager role (from bootstrap API). */
 const canSwitchToDesk = computed(() => Boolean(bootstrapStore.data?.can_switch_to_desk));
@@ -1583,7 +1632,11 @@ onMounted(async () => {
 		const hasShift = await shiftStore.checkShift();
 
 		if (!hasShift) {
-			uiStore.showOpenShiftDialog = true;
+			if (shiftStore.isSpgMode) {
+				showSpgShiftDialog.value = true;
+			} else {
+				uiStore.showOpenShiftDialog = true;
+			}
 			return;
 		}
 
@@ -2116,6 +2169,11 @@ async function handleProceedToPayment() {
 		return;
 	}
 
+	if (shiftStore.isSpgMode) {
+		await handleSaveSpgOrder();
+		return;
+	}
+
 	const customerValue = cartStore.customer?.name || cartStore.customer;
 	if (!customerValue && !shiftStore.profileCustomer) {
 		showWarning(__("Please select a customer before proceeding"));
@@ -2140,6 +2198,59 @@ async function handleProceedToPayment() {
 	}
 
 	uiStore.showPaymentDialog = true;
+}
+
+/**
+ * SPG: save the cart as a nextend POS Order (locks its stock), print the slip
+ * with QR for the customer to bring to the cashier, then start a new cart.
+ * Prices are sent as computed here - they stay locked on the order.
+ */
+async function handleSaveSpgOrder() {
+	if (savingSpgOrder.value) return;
+	if (offlineStore.isOffline) {
+		showWarning(__("Pesanan hanya bisa disimpan saat online"));
+		return;
+	}
+
+	cartStore.dropOutOfStockFreeItems();
+	if (cartStore.isEmpty) return;
+
+	const customer = cartStore.customer?.name || cartStore.customer;
+	const items = cartStore.formatItemsForSubmission(cartStore.invoiceItems).map((row) => ({
+		...row,
+		addon_item: row.custom_addon_item,
+		addon_key: row.custom_addon_key,
+		addon_parent_key: row.custom_addon_parent_key,
+	}));
+
+	savingSpgOrder.value = true;
+	try {
+		const order = await call("nextend.pos_order.create_order", {
+			order: JSON.stringify({
+				pos_opening_shift: shiftStore.currentShift?.name,
+				customer: customer && customer !== shiftStore.profileCustomer ? customer : null,
+				discount_amount: cartStore.additionalDiscount || 0,
+				coupon_code:
+					cartStore.appliedCoupon?.code || cartStore.appliedCoupon?.name || null,
+				items,
+			}),
+		});
+
+		cartStore.clearCart();
+		previousCartHash = "";
+		await cartStore.setDefaultCustomer();
+		showSuccess(__("Pesanan {0} tersimpan", [order.name]));
+
+		try {
+			printSpgOrderSlip(order);
+		} catch (error) {
+			showError(error.message);
+		}
+	} catch (error) {
+		showError(error?.messages?.[0] || error?.message || __("Gagal menyimpan pesanan"));
+	} finally {
+		savingSpgOrder.value = false;
+	}
 }
 
 async function handleDeleteFailedInvoice() {

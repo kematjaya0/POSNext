@@ -1516,15 +1516,18 @@
 							d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
 						/>
 					</svg>
-					<span>{{
-						approvalPreview.needs_approval ? __("Checkout (perlu approval)") : __("Checkout")
+					<span v-if="spgMode">{{ __("Simpan Pesanan") }}</span>
+					<span v-else>{{
+						approvalPreview.needs_approval
+							? __("Checkout (perlu approval)")
+							: __("Checkout")
 					}}</span>
 				</button>
 
 				<!-- Hold Order Button (Secondary - 50% width) -->
 				<button
 					type="button"
-					v-if="items.length > 0"
+					v-if="items.length > 0 && !spgMode"
 					@click="$emit('save-draft')"
 					class="flex-1 py-2.5 px-2 rounded-lg font-semibold text-xs text-orange-700 bg-orange-50 hover:bg-orange-100 active:bg-orange-200 transition-all touch-manipulation active:scale-[0.98] flex items-center justify-center"
 					:aria-label="__('Hold order as draft')"
@@ -1619,6 +1622,11 @@ const props = defineProps({
 		default: () => [],
 	},
 	customer: Object,
+	/** SPG (nextend POS Order): checkout saves an order for the cashier instead of paying */
+	spgMode: {
+		type: Boolean,
+		default: false,
+	},
 	subtotal: {
 		type: Number,
 		default: 0,

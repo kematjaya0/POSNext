@@ -410,6 +410,7 @@
 								"
 								@update-uom="cartStore.changeItemUOM"
 								@edit-item="handleEditItem"
+								@edit-addons="openAddonDialog"
 								@view-shift="uiStore.showOpenShiftDialog = true"
 								@show-drafts="uiStore.showDraftDialog = true"
 								@show-history="uiStore.showHistoryDialog = true"
@@ -622,6 +623,13 @@
 			/>
 
 			<!-- Generic Item Selection Dialog -->
+			<ItemAddonDialog
+				v-model="showAddonDialog"
+				:item="addonDialogItem"
+				:currency="shiftStore.profileCurrency"
+				@save="handleAddonsSaved"
+			/>
+
 			<ItemSelectionDialog
 				v-model="uiStore.showItemSelectionDialog"
 				:item="cartStore.pendingItem"
@@ -1051,6 +1059,8 @@ import InvoiceCart from "@/components/sale/InvoiceCart.vue";
 import InvoiceHistoryDialog from "@/components/sale/InvoiceHistoryDialog.vue";
 import ShiftHistoryDialog from "@/components/sale/ShiftHistoryDialog.vue";
 import ItemSelectionDialog from "@/components/sale/ItemSelectionDialog.vue";
+import ItemAddonDialog from "@/components/sale/ItemAddonDialog.vue";
+import { loadCachedAddonCatalog } from "@/utils/itemAddons";
 import ItemsSelector from "@/components/sale/ItemsSelector.vue";
 import OffersDialog from "@/components/sale/OffersDialog.vue";
 import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
@@ -1260,6 +1270,21 @@ function computeCartHash() {
 		.join("|");
 }
 
+// Add on dialog (tinta etc. attached to a cart line - see utils/itemAddons)
+const showAddonDialog = ref(false);
+const addonDialogItem = ref(null);
+
+function openAddonDialog(item) {
+	addonDialogItem.value = item;
+	showAddonDialog.value = true;
+}
+
+function handleAddonsSaved(addons) {
+	const item = addonDialogItem.value;
+	if (!item) return;
+	cartStore.setItemAddons(item.item_code, item.uom, addons);
+}
+
 // Promotion dialog
 const showPromotionManagement = ref(false);
 
@@ -1347,6 +1372,8 @@ let resizeState = null;
 let bodyStyleSnapshot = null;
 
 onMounted(async () => {
+	loadCachedAddonCatalog();
+
 	// Window resize listeners (passive for better performance)
 	const handleResize = () => {
 		uiStore.setWindowWidth(window.innerWidth);
@@ -2809,7 +2836,19 @@ async function handleEditOfflineInvoice(invoice) {
 		}
 
 		if (invoiceData.items && invoiceData.items.length > 0) {
+			// Add on rows go back onto their base line instead of becoming cart lines.
+			const addonsByKey = {};
+			for (const row of invoiceData.items) {
+				if (!row.custom_addon_parent_key) continue;
+				(addonsByKey[row.custom_addon_parent_key] ||= []).push({
+					item_code: row.custom_addon_item,
+					item_name: row.item_name,
+					amount: row.rate,
+				});
+			}
+
 			for (const item of invoiceData.items) {
+				if (item.custom_addon_parent_key) continue;
 				// Use autoAdd=true to skip stock validation when loading saved invoices
 				// Check both quantity and qty fields since items are stored with 'quantity'
 				cartStore.addItem(
@@ -2818,6 +2857,10 @@ async function handleEditOfflineInvoice(invoice) {
 					true,
 					shiftStore.currentProfile
 				);
+				const addons = addonsByKey[item.custom_addon_key];
+				if (addons) {
+					cartStore.setItemAddons(item.item_code, item.uom || item.stock_uom, addons);
+				}
 			}
 		}
 

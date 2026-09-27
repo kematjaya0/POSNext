@@ -5,6 +5,8 @@ import { useSerialNumberStore } from "@/stores/serialNumber";
 import { CoalescingMutex } from "@/utils/mutex";
 import { logger } from "@/utils/logger";
 import { roundCurrency } from "@/utils/currency";
+import { getAddonCarrierItem } from "@/utils/itemAddons";
+import { generateUUID } from "@/utils/offline/uuid";
 
 const log = logger.create("Invoice");
 
@@ -345,6 +347,9 @@ export function useInvoice() {
 			);
 			_cachedTotalTax.value -= itemToRemove.tax_amount || 0;
 			_cachedTotalDiscount.value -= itemToRemove.discount_amount || 0;
+			const addons = addonTotals(itemToRemove);
+			_cachedSubtotal.value -= addons.subtotal;
+			_cachedTotalTax.value -= addons.tax;
 
 			// Return serial numbers back to cache if item has serials
 			if (itemToRemove.serial_no && itemToRemove.has_serial_no) {
@@ -714,6 +719,69 @@ export function useInvoice() {
 		return totalRate;
 	}
 
+	/**
+	 * Totals of a line's add ons. Add on amounts are typed by the cashier as
+	 * the line total (not per unit) and follow the same tax mode as items.
+	 */
+	function addonTotals(item) {
+		const gross = roundCurrency(
+			(item.addons || []).reduce((sum, a) => sum + (Number.parseFloat(a.amount) || 0), 0)
+		);
+		const taxRate = calculateTotalTaxRate();
+		if (!gross || !taxRate) return { subtotal: gross, tax: 0 };
+		if (taxInclusive.value) {
+			return { subtotal: gross, tax: roundCurrency(gross - gross / (1 + taxRate / 100)) };
+		}
+		return { subtotal: gross, tax: roundCurrency((gross * taxRate) / 100) };
+	}
+
+	/**
+	 * Replace the add ons of the line matching item_code + uom.
+	 * @param {Array} addons - [{ item_code, item_name, amount }]
+	 */
+	function setItemAddons(itemCode, uom, addons) {
+		const item = invoiceItems.value.find(
+			(i) => i.item_code === itemCode && i.uom === uom && !i.is_free_item
+		);
+		if (!item) return;
+
+		const before = addonTotals(item);
+		item.addons = addons.map((a) => ({
+			item_code: a.item_code,
+			item_name: a.item_name,
+			amount: roundCurrency(Number.parseFloat(a.amount) || 0),
+		}));
+		if (item.addons.length && !item.addon_key) {
+			item.addon_key = generateUUID();
+		}
+		const after = addonTotals(item);
+		_cachedSubtotal.value += after.subtotal - before.subtotal;
+		_cachedTotalTax.value += after.tax - before.tax;
+	}
+
+	/** Sales Invoice rows for a line's add ons - see nextend.item_addon. */
+	function addonRowsForSubmission(item) {
+		const carrier = getAddonCarrierItem();
+		if (!carrier || !item.addons?.length) return [];
+		return item.addons.map((addon) => ({
+			item_code: carrier,
+			item_name: addon.item_name,
+			qty: 1,
+			rate: addon.amount,
+			price_list_rate: addon.amount,
+			warehouse: item.warehouse,
+			conversion_factor: 1,
+			discount_percentage: 0,
+			discount_amount: 0,
+			pricing_rules: "",
+			is_rate_manually_edited: 0,
+			original_rate: null,
+			is_free_item: 0,
+			custom_addon_item: addon.item_code,
+			custom_addon_parent_key: item.addon_key,
+		}));
+	}
+
 	function rebuildIncrementalCache() {
 		/**
 		 * Rebuild cache from scratch - used when bulk operations modify all items
@@ -730,6 +798,9 @@ export function useInvoice() {
 			_cachedSubtotal.value += roundCurrency(item.quantity * roundCurrency(effectiveRate));
 			_cachedTotalTax.value += item.tax_amount || 0;
 			_cachedTotalDiscount.value += item.discount_amount || 0;
+			const addons = addonTotals(item);
+			_cachedSubtotal.value += addons.subtotal;
+			_cachedTotalTax.value += addons.tax;
 		}
 
 		_cachedTotalPaid.value = 0;
@@ -924,7 +995,12 @@ export function useInvoice() {
 				continue;
 			}
 
-			out.push(mapRow(item, paidQty));
+			const row = mapRow(item, paidQty);
+			const addonRows = addonRowsForSubmission(item);
+			if (addonRows.length) {
+				row.custom_addon_key = item.addon_key;
+			}
+			out.push(row, ...addonRows);
 
 			if (fq > 0) {
 				const u = item.uom || item.stock_uom;
@@ -1483,6 +1559,7 @@ export function useInvoice() {
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
 		resolveUomPricing,
+		setItemAddons,
 
 		// Resources
 		updateInvoiceResource,

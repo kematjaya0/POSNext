@@ -1328,6 +1328,26 @@
 									</div>
 								</div>
 							</div>
+
+							<!-- Add ons (e.g. tinta), indented under their base line -->
+							<div
+								v-for="addon in item.addons || []"
+								:key="addon.item_code"
+								class="flex items-center justify-between ps-3 mt-0.5 text-[11px] sm:text-xs text-gray-600"
+							>
+								<span class="truncate">+ {{ addon.item_name }}</span>
+								<span class="font-semibold text-gray-700">{{
+									formatCurrency(addon.amount)
+								}}</span>
+							</div>
+							<button
+								v-if="!item.is_free_item && (item.addons?.length || hasAddons(item))"
+								type="button"
+								@click.stop="$emit('edit-addons', item)"
+								class="self-start mt-0.5 text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-800"
+							>
+								{{ item.addons?.length ? __("Edit Add On") : __("+ Add On") }}
+							</button>
 						</div>
 					</div>
 				</div>
@@ -1554,6 +1574,7 @@ import { useCartSort } from "@/composables/useCartSort";
 import { isOffline } from "@/utils/offline";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { logger } from "@/utils/logger";
+import { getAvailableAddons } from "@/utils/itemAddons";
 import { FeatherIcon } from "frappe-ui";
 
 const log = logger.create("InvoiceCart");
@@ -1729,6 +1750,7 @@ const emit = defineEmits([
 	"remove-offer", // (offerId) - Remove applied offer
 	"update-uom", // (itemCode, newUom) - Change item's unit of measure
 	"edit-item", // (item) - Open item edit dialog
+	"edit-addons", // (item) - Open add on dialog for a cart line
 	"view-shift", // () - View current shift details
 	"show-drafts", // () - Show draft/held orders
 	"show-history", // () - Show invoice history
@@ -2326,6 +2348,10 @@ function getItemDiscountPercent(item) {
  */
 function formatCurrency(amount) {
 	return formatCurrencyUtil(Number.parseFloat(amount || 0), props.currency);
+}
+
+function hasAddons(item) {
+	return getAvailableAddons(item).length > 0;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

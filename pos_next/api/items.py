@@ -105,6 +105,27 @@ def _fetch_item_uom_prices(item_code, price_list, transaction_date=None):
 	return uom_prices
 
 
+def get_stock_locks(item_codes, warehouses):
+	"""Stock held back from sale by other apps, as ``{(item_code, warehouse): qty}``.
+
+	Apps register ``pos_next_stock_locks`` hooks - callables taking
+	``(warehouses, item_codes)`` and returning that map (e.g. nextend's pending
+	SPG orders). Subtracted from ``actual_qty`` wherever POS shows or
+	validates stock, so a terminal can't sell what is already promised.
+	"""
+	locks = defaultdict(float)
+	if not item_codes or not warehouses:
+		return locks
+	for method in frappe.get_hooks("pos_next_stock_locks"):
+		for key, qty in (frappe.get_attr(method)(list(warehouses), list(item_codes)) or {}).items():
+			locks[tuple(key)] += flt(qty)
+	return locks
+
+
+def _locked_qty(locks, item_code, warehouses):
+	return sum(locks.get((item_code, warehouse), 0.0) for warehouse in warehouses)
+
+
 def get_stock_availability(item_code, warehouse):
 	"""Return total available quantity for an item in the given warehouse."""
 	if not warehouse:
@@ -124,7 +145,8 @@ def get_stock_availability(item_code, warehouse):
 		.run(as_dict=True)
 	)
 
-	return flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
+	actual_qty = flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
+	return actual_qty - _locked_qty(get_stock_locks([item_code], warehouses), item_code, warehouses)
 
 
 def _get_uom_conversion_factor(item_code, uom):
@@ -204,7 +226,10 @@ def get_item_warehouse_stock(item_code, uom=None, pos_profile=None):
 		.where(Bin.warehouse.isin([w.name for w in candidates]))
 		.run(as_dict=True)
 	)
-	stock_by_warehouse = {row.warehouse: flt(row.actual_qty) for row in stock_rows}
+	locks = get_stock_locks([item_code], [w.name for w in candidates])
+	stock_by_warehouse = {
+		row.warehouse: flt(row.actual_qty) - locks.get((item_code, row.warehouse), 0.0) for row in stock_rows
+	}
 
 	result = []
 	for warehouse in candidates:
@@ -609,7 +634,9 @@ def get_item_stock(item_code, warehouse):
 			or {}
 		)
 
-		stock_qty = flt(bin_data.get("actual_qty", 0))
+		stock_qty = flt(bin_data.get("actual_qty", 0)) - _locked_qty(
+			get_stock_locks([item_code], [warehouse]), item_code, [warehouse]
+		)
 		reserved_qty = flt(bin_data.get("reserved_qty", 0))
 
 		return {
@@ -765,7 +792,12 @@ def get_item_variants(template_item, pos_profile):
 				.where(Bin.warehouse == pos_profile_doc.warehouse)
 				.run(as_dict=True)
 			)
-			stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
+			locks = get_stock_locks(variant_codes, [pos_profile_doc.warehouse])
+			stock_map = {
+				s["item_code"]: flt(s["actual_qty"])
+				- locks.get((s["item_code"], pos_profile_doc.warehouse), 0.0)
+				for s in stocks
+			}
 
 		# Enrich each variant with attributes, price, stock, and UOMs
 		for variant in variants:
@@ -1430,7 +1462,12 @@ def get_items(
 					.where(Bin.warehouse == pos_profile_doc.warehouse)
 					.run(as_dict=True)
 				)
-				stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
+				locks = get_stock_locks(stock_items, [pos_profile_doc.warehouse])
+				stock_map = {
+					s["item_code"]: flt(s["actual_qty"])
+					- locks.get((s["item_code"], pos_profile_doc.warehouse), 0.0)
+					for s in stocks
+				}
 
 		# ===================================================================
 		# PRODUCT BUNDLE AVAILABILITY: Calculate bundle stock (bulk optimized)
@@ -1747,7 +1784,10 @@ def get_items_bulk(
 				.groupby(Bin.item_code)
 				.run(as_dict=True)
 			)
-			stock_map = {s.item_code: flt(s.qty) for s in stock_data}
+			locks = get_stock_locks(item_codes, warehouses)
+			stock_map = {
+				s.item_code: flt(s.qty) - _locked_qty(locks, s.item_code, warehouses) for s in stock_data
+			}
 
 		# Bundle availability
 		bundle_availability_map = {}
@@ -2064,6 +2104,7 @@ def get_stock_quantities(item_codes, warehouse):
 
 		# Create a lookup for items that have stock entries
 		item_stock_map = {row["item_code"]: row for row in stock_rows}
+		locks = get_stock_locks(normalized_codes, warehouses)
 
 		# Get bundle availability for non-stock items (bulk optimized)
 		bundle_availability_map = _calculate_bundle_availability_bulk(normalized_codes, warehouse)
@@ -2080,6 +2121,7 @@ def get_stock_quantities(item_codes, warehouse):
 				# Regular item - use Bin data
 				row = item_stock_map.get(item_code)
 				actual_qty = flt(row["actual_qty"]) if row else 0.0
+				actual_qty -= _locked_qty(locks, item_code, warehouses)
 				reserved_qty = flt(row["reserved_qty"]) if row else 0.0
 
 			result.append(
@@ -2272,11 +2314,14 @@ def get_item_warehouse_availability(item_code=None, item_codes=None, company=Non
 			else:
 				query = query.groupby(bin_tbl.warehouse)
 
+			locks = get_stock_locks(regular_items, warehouse_names)
 			for stock in query.run(as_dict=True):
+				locked_items = [stock.item_code] if include_item_code else regular_items
+				locked = sum(locks.get((code, stock.warehouse), 0.0) for code in locked_items)
 				result.append(
 					_build_stock_entry(
 						stock.warehouse,
-						stock.actual_qty,
+						flt(stock.actual_qty) - locked,
 						stock.reserved_qty,
 						warehouse_map,
 						stock.get("item_code") if include_item_code else None,

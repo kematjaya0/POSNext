@@ -159,6 +159,14 @@ export function buildReceiptHTML(invoiceData) {
 	const paidAmount = derivePaidAmount(invoiceData);
 	const itemsHtml = items
 		.map((item) => {
+			if (item.custom_addon_parent_key) {
+				// Add on (tinta etc.) printed indented under its base line.
+				return `
+						<div class="item-details" style="padding-left: 12px; font-size: 0.9em;">
+							<span>+ ${item.item_name || item.custom_addon_item}</span>
+							<span>${formatCurrency(item.rate || 0)}</span>
+						</div>`;
+			}
 			const hasDiscount =
 				(item.discount_percentage && Number.parseFloat(item.discount_percentage) > 0) ||
 				(item.discount_amount && Number.parseFloat(item.discount_amount) > 0);

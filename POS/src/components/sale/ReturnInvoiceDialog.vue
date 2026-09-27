@@ -710,6 +710,29 @@
 									</div>
 								</div>
 							</div>
+
+							<!-- Add ons of this line: returned with it, nominal chosen by cashier -->
+							<div
+								v-for="addon in addonRowsOf(item)"
+								:key="addon.name"
+								class="flex items-center justify-between gap-2 mt-2 ps-7 text-xs text-gray-700"
+								@click.stop
+							>
+								<span class="truncate text-start">+ {{ addon.item_name }}</span>
+								<div class="flex items-center gap-1">
+									<span class="text-gray-500">{{
+										__("Refund (max {0})", [formatCurrency(addon.rate)])
+									}}</span>
+									<input
+										v-model.number="addon.return_rate"
+										:disabled="!item.selected"
+										type="number"
+										min="0"
+										:max="addon.rate"
+										class="w-24 px-1 py-1 border border-gray-300 rounded text-end disabled:bg-gray-100"
+									/>
+								</div>
+							</div>
 						</div>
 					</div>
 					<p v-if="returnItems.length === 0" class="text-center py-8 text-gray-500">
@@ -1394,6 +1417,8 @@ const fetchInvoiceResource = createResource({
 				selected: false,
 				return_qty: item.remaining_qty,
 				original_qty: item.original_qty,
+				// Add on (tinta etc.): the cashier decides the refunded nominal.
+				return_rate: item.rate,
 			}));
 			returnItems.value.forEach(normalizeItemQuantity);
 
@@ -1469,12 +1494,15 @@ const createReturnResource = createResource({
 				item_code: item.item_code,
 				item_name: item.item_name,
 				qty: -Math.abs(item.return_qty),
-				rate: item.rate,
+				rate: item.custom_addon_parent_key ? addonReturnRate(item) : item.rate,
 				warehouse: item.warehouse,
 				uom: item.uom,
 				conversion_factor: item.conversion_factor || 1,
 				// Link to original invoice item row for accurate return tracking in ERPNext
 				sales_invoice_item: item.name,
+				custom_addon_key: item.custom_addon_key,
+				custom_addon_parent_key: item.custom_addon_parent_key,
+				custom_addon_item: item.custom_addon_item,
 			})),
 			// Flag to indicate return amount should be added to customer credit balance
 			add_to_customer_balance: addToCustomerCredit.value,
@@ -1588,14 +1616,42 @@ watch(
 );
 
 // Computed properties
-const selectedItems = computed(() =>
-	returnItems.value.filter((item) => item.selected && item.return_qty > 0)
-);
+// Add on rows are never picked on their own: they are returned together with
+// their base line (nextend requires the pair in one return).
+const selectedItems = computed(() => {
+	const baseKeys = new Set(
+		returnItems.value
+			.filter((item) => item.selected && item.return_qty > 0 && item.custom_addon_key)
+			.map((item) => item.custom_addon_key)
+	);
+	return returnItems.value.filter((item) =>
+		item.custom_addon_parent_key
+			? baseKeys.has(item.custom_addon_parent_key)
+			: item.selected && item.return_qty > 0
+	);
+});
+
+function addonRowsOf(item) {
+	if (!item.custom_addon_key) return [];
+	return returnItems.value.filter((row) => row.custom_addon_parent_key === item.custom_addon_key);
+}
+
+function addonReturnRate(item) {
+	return Math.min(Math.max(Number(item.return_rate) || 0, 0), item.rate);
+}
+
+function returnUnitAmount(item) {
+	if (!item.custom_addon_parent_key) return item.rate_with_tax || item.rate;
+	// Keep the original tax ratio on the cashier-chosen nominal.
+	const ratio = item.rate ? (item.rate_with_tax || item.rate) / item.rate : 1;
+	return addonReturnRate(item) * ratio;
+}
 
 const filteredReturnItems = computed(() => {
-	if (!itemSearchFilter.value) return returnItems.value;
+	const items = returnItems.value.filter((item) => !item.custom_addon_parent_key);
+	if (!itemSearchFilter.value) return items;
 	const searchTerm = itemSearchFilter.value.toLowerCase();
-	return returnItems.value.filter(
+	return items.filter(
 		(item) =>
 			item.item_name?.toLowerCase().includes(searchTerm) ||
 			item.item_code?.toLowerCase().includes(searchTerm)
@@ -1609,7 +1665,7 @@ const returnTotal = computed(() =>
 	roundCurrency(
 		selectedItems.value.reduce(
 			(sum, item) =>
-				sum + roundCurrency(item.return_qty * (item.rate_with_tax || item.rate)),
+				sum + roundCurrency(item.return_qty * returnUnitAmount(item)),
 			0
 		)
 	)

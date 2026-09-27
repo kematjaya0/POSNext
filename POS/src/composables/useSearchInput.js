@@ -1,5 +1,6 @@
 import { ref, watch, nextTick, onUnmounted } from "vue";
 import { QueuedMutex } from "@/utils/mutex";
+import { parsePosOrderCode } from "@/utils/posOrderCode";
 
 /**
  * Composable for search input, barcode scanning, and auto-add logic.
@@ -22,8 +23,16 @@ import { QueuedMutex } from "@/utils/mutex";
  *        Component's selectItem(). Returns true if item was accepted.
  * @param {Object} options.showWarning        - useToast().showWarning
  * @param {import('vue').Ref<boolean>} options.isAnyDialogOpen
+ * @param {(code: {name: string, payload: Object|null}) => void} [options.onPosOrderScanned]
+ *        Called instead of the item lookup when an SPG order QR/number is scanned.
  */
-export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialogOpen }) {
+export function useSearchInput({
+	itemStore,
+	onItemFound,
+	showWarning,
+	isAnyDialogOpen,
+	onPosOrderScanned,
+}) {
 	// --- Reactive state (exposed) ---
 	const searchInputRef = ref(null);
 	const scannerEnabled = ref(false);
@@ -145,6 +154,12 @@ export function useSearchInput({ itemStore, onItemFound, showWarning, isAnyDialo
 	 */
 	function processBarcodeScan(barcode, forceAutoAdd) {
 		const shouldAutoAdd = forceAutoAdd || (scannerEnabled.value && autoAddEnabled.value);
+
+		const posOrderCode = onPosOrderScanned && parsePosOrderCode(barcode);
+		if (posOrderCode) {
+			onPosOrderScanned(posOrderCode);
+			return;
+		}
 
 		barcodeQueue.withLock(async () => {
 			try {

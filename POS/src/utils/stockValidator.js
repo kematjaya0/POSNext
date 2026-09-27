@@ -15,6 +15,9 @@ import { call } from "frappe-ui";
 export function shouldValidateItemStock(item) {
 	if (!item) return false;
 
+	// SPG order rows (nextend POS Order): their stock is already reserved for the order
+	if (item.pos_order_row) return false;
+
 	// Non-stock items are never validated
 	if (item.is_stock_item === 0 || item.is_stock_item === false) return false;
 

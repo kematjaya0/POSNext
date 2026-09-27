@@ -348,6 +348,7 @@
 								:cart-items="cartStore.invoiceItems"
 								:currency="shiftStore.profileCurrency"
 								@item-selected="handleItemSelected"
+								@pos-order-scanned="handlePosOrderScanned"
 							/>
 						</div>
 					</keep-alive>
@@ -1088,6 +1089,7 @@ import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import SpgOrdersDialog from "@/components/sale/SpgOrdersDialog.vue";
 import SpgShiftDialog from "@/components/sale/SpgShiftDialog.vue";
 import { printSpgOrderSlip } from "@/utils/printSpgOrder";
+import { orderFromQrPayload } from "@/utils/posOrderCode";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import SessionLockScreen from "@/components/common/SessionLockScreen.vue";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
@@ -1737,8 +1739,8 @@ watch(
 		const newCustomerName = newCustomer?.name || newCustomer;
 		const oldCustomerName = oldCustomer?.name || oldCustomer;
 
-		// Only reapply if customer actually changed
-		if (newCustomerName !== oldCustomerName) {
+		// Only reapply if customer actually changed (SPG order prices are locked)
+		if (newCustomerName !== oldCustomerName && !cartStore.posOrder) {
 			// Clear existing timer
 			if (offerReapplyTimer.value) {
 				clearTimeout(offerReapplyTimer.value);
@@ -2035,6 +2037,12 @@ async function handleShiftClosed() {
 }
 
 function handleItemSelected(item, autoAdd = false) {
+	if (cartStore.posOrder) {
+		showWarning(
+			__("Keranjang berisi pesanan SPG {0} - item tidak bisa ditambah", [cartStore.posOrder])
+		);
+		return;
+	}
 	// Auto-add mode
 	if (autoAdd) {
 		try {
@@ -2201,6 +2209,72 @@ async function handleProceedToPayment() {
 }
 
 /**
+ * Cashier: an SPG order slip was scanned (QR) or its number typed. Online the
+ * order is fetched to make sure it is still Pending; offline the QR itself
+ * carries the order. Its rows land in the cart read-only (see loadPosOrder).
+ */
+async function handlePosOrderScanned(code) {
+	if (shiftStore.isSpgMode) {
+		showWarning(__("Pesanan SPG dibayar di kasir"));
+		return;
+	}
+	if (cartStore.posOrder === code.name) return;
+	if (!cartStore.isEmpty) {
+		showWarning(
+			__("Selesaikan atau kosongkan keranjang sebelum memuat pesanan {0}", [code.name])
+		);
+		return;
+	}
+
+	let order = null;
+	if (!offlineStore.isOffline) {
+		try {
+			order = await call("nextend.pos_order.get_order", { name: code.name });
+		} catch (error) {
+			if (!code.payload) {
+				showError(error?.messages?.[0] || error?.message || __("Pesanan tidak ditemukan"));
+				return;
+			}
+		}
+		if (order && order.status !== "Pending") {
+			showError(__("Pesanan {0} sudah {1}", [order.name, __(order.status)]));
+			return;
+		}
+	}
+	if (!order) {
+		if (!code.payload) {
+			showWarning(__("Sedang offline - scan QR pesanan (bukan nomornya)"));
+			return;
+		}
+		order = orderFromQrPayload(code.payload);
+		await fillOrderItemNamesFromCache(order);
+	}
+
+	cartStore.loadPosOrder(order);
+	if (order.customer) {
+		cartStore.setCustomer({ name: order.customer, customer_name: order.customer });
+	}
+	previousCartHash = computeCartHash();
+	showSuccess(__("Pesanan {0} dimuat", [order.name]));
+}
+
+async function fillOrderItemNamesFromCache(order) {
+	for (const row of order.items) {
+		const code = row.addon_item || row.item_code;
+		try {
+			const cached = await offlineWorker.searchCachedItems(code, 5);
+			const match = cached?.find((i) => i.item_code === code);
+			if (match) {
+				row.item_name = match.item_name;
+				row.stock_uom = match.stock_uom;
+			}
+		} catch {
+			// Name is cosmetic - the item code is shown instead
+		}
+	}
+}
+
+/**
  * SPG: save the cart as a nextend POS Order (locks its stock), print the slip
  * with QR for the customer to bring to the cashier, then start a new cart.
  * Prices are sent as computed here - they stay locked on the order.
@@ -2345,6 +2419,10 @@ async function handlePaymentCompleted(paymentData) {
 				receivable_account: paymentData.receivable_account || null,
 				edited_from: editingOfflineContext?.originalOfflineId || null,
 			};
+			if (cartStore.posOrder) {
+				invoiceData.custom_pos_order = cartStore.posOrder;
+				invoiceData.discount_amount = cartStore.additionalDiscount || 0;
+			}
 
 			// Save to the offline queue first so we can use the worker's
 			// canonical pos_offline_<uuid> id as the cache key — keeping

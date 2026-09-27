@@ -1341,7 +1341,11 @@
 								}}</span>
 							</div>
 							<button
-								v-if="!item.is_free_item && (item.addons?.length || hasAddons(item))"
+								v-if="
+									!item.is_free_item &&
+									!item.pos_order_row &&
+									(item.addons?.length || hasAddons(item))
+								"
 								type="button"
 								@click.stop="$emit('edit-addons', item)"
 								class="self-start mt-0.5 text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-800"
@@ -2527,6 +2531,8 @@ async function selectUom(item, newUom) {
  * @param {Object} item - Cart item to edit
  */
 function openEditDialog(item) {
+	// SPG order rows are read-only for the cashier (remove only)
+	if (item.pos_order_row) return;
 	selectedItem.value = { ...item };
 	showEditDialog.value = true;
 }

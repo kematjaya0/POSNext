@@ -112,6 +112,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
 		setItemAddons,
+		posOrder,
+		loadPosOrder,
 	} = useInvoice();
 
 	const offersStore = usePOSOffersStore();
@@ -720,7 +722,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 		const skippedCodes = [];
 		const kept = invoiceItems.value.filter((item) => {
-			if (!item.is_free_item) return true;
+			// SPG order rows: stock is already reserved for the order
+			if (!item.is_free_item || item.pos_order_row) return true;
 			const requested =
 				(Number(item.quantity) || 0) * (Number(item.conversion_factor) || 1);
 			if (isFreeItemOutOfStock(item.item_code, requested)) {
@@ -1157,6 +1160,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @returns {boolean} True if any offers were removed
 	 */
 	async function reapplyOffer(currentProfile, signal = null) {
+		// SPG order prices are locked - offers must not reprice them
+		if (posOrder.value) return false;
 		// Clear offers if cart is empty
 		if (invoiceItems.value.length === 0 && appliedOffers.value.length) {
 			appliedOffers.value = [];
@@ -2699,7 +2704,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @returns {Promise<boolean>} true if any line's discount changed
 	 */
 	async function revalidateOffers() {
-		if (isEmpty.value) return false;
+		// SPG order prices are locked - offers must not reprice them
+		if (isEmpty.value || posOrder.value) return false;
 
 		debouncedProcessOffers.cancel();
 		offerQueue.cancel();
@@ -2872,6 +2878,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		buildOfferEvaluationPayload,
 		formatItemsForSubmission,
 		setItemAddons,
+		posOrder,
+		loadPosOrder,
 
 		// Sales Order feature
 		targetDoctype,

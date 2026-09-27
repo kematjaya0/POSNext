@@ -1038,7 +1038,7 @@ const props = defineProps({
 	},
 });
 
-const emit = defineEmits(["item-selected"]);
+const emit = defineEmits(["item-selected", "pos-order-scanned"]);
 
 // Use composables
 const { getStockStatus } = useStock();
@@ -1083,6 +1083,7 @@ const {
 	onItemFound: selectItem,
 	showWarning,
 	isAnyDialogOpen,
+	onPosOrderScanned: (code) => emit("pos-order-scanned", code),
 });
 
 // Local state

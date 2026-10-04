@@ -8,6 +8,10 @@ from frappe.model.document import Document
 from frappe.utils import cint, flt, getdate, strip, today
 
 ONE_USE_COUPON_DOCTYPES = ("Sales Invoice", "POS Invoice")
+# Where a sale records the POS Coupon it used. Not `coupon_code`: on Sales
+# Invoice that is ERPNext's Link to Coupon Code, which ERPNext validates and
+# counts against its own Coupon Code doctype on validate/submit.
+INVOICE_COUPON_FIELD = "posa_coupon_code"
 
 
 class POSCoupon(Document):
@@ -144,14 +148,14 @@ def _get_customer_coupon_usage_count(customer, coupon_code):
 			continue
 
 		meta = frappe.get_meta(doctype)
-		if not meta.has_field("coupon_code"):
+		if not meta.has_field(INVOICE_COUPON_FIELD):
 			continue
 
 		used_count += frappe.db.count(
 			doctype,
 			filters={
 				"customer": customer,
-				"coupon_code": coupon_code,
+				INVOICE_COUPON_FIELD: coupon_code,
 				"docstatus": 1,
 			},
 		)

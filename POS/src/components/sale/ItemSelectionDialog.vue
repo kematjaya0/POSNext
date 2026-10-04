@@ -183,6 +183,8 @@
 						:item-code="item?.item_code"
 						:uom="selectedOption?.uom"
 						:pos-profile="posProfile"
+						:qty="neededQty"
+						auto-select
 						@warehouse-stock="selectedWarehouseStock = $event"
 					/>
 
@@ -378,6 +380,8 @@ import { createResource } from "frappe-ui";
 import { computed, nextTick, ref, watch } from "vue";
 import TranslatedHTML from "../common/TranslatedHTML.vue";
 import WarehouseStockList from "./WarehouseStockList.vue";
+import { usePOSCartStore } from "@/stores/posCart";
+import { cartStockQty } from "@/utils/stockValidator";
 import { offlineState } from "@/utils/offline/offlineState";
 import { getCachedVariants, cacheItems } from "@/utils/offline/items";
 
@@ -410,10 +414,23 @@ const selectedWarehouseStock = ref(null);
 const quantity = ref(1);
 const selectedAttributes = ref({}); // For variant attribute selection
 const quantityInput = ref(null);
+const cartStore = usePOSCartStore();
+
+// What the branch must cover in the selected UOM: this add plus what the
+// cart already holds of the item - gates WarehouseStockList's outside tier
+const neededQty = computed(
+	() =>
+		(Number(quantity.value) || 0) +
+		cartStockQty(cartStore.invoiceItems, props.item?.item_code) /
+			(Number(selectedOption.value?.conversion_factor) || 1)
+);
 
 // Computed properties for dialog customization
 const dialogTitle = computed(() => {
-	return props.mode === "variant" ? __("Select Item Variant") : __("Select Unit of Measure");
+	if (props.mode === "variant") return __("Select Item Variant");
+	// Opened only to pick the warehouse (no extra UOMs to choose from)
+	if (!props.item?.item_uoms?.length) return __("Item Stock");
+	return __("Select Unit of Measure");
 });
 
 const dialogDescription = computed(() => {
@@ -440,9 +457,11 @@ const stockWarning = computed(() => {
 		null;
 	if (availableStock === null) return null;
 
-	if (quantity.value > availableStock) {
+	// The cart keeps one row per item + UOM, so the warehouse must cover what
+	// the cart already holds as well
+	if (neededQty.value > availableStock) {
 		return __("Requested quantity ({0}) exceeds available stock ({1})", [
-			quantity.value,
+			neededQty.value,
 			Math.floor(availableStock),
 		]);
 	}

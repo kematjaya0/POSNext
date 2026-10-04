@@ -562,7 +562,8 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 			// Get display stock (includes reservations from cart)
 			const displayStock = stockStore.getDisplayStock(item.item_code);
 			// Get original server stock (without reservations)
-			const originalStock = stockStore.server.get(item.item_code)?.qty || 0;
+			const serverStock = stockStore.server.get(item.item_code);
+			const originalStock = serverStock?.qty || 0;
 
 			// Return item with updated stock quantities
 			return {
@@ -570,6 +571,8 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 				actual_qty: displayStock,
 				stock_qty: displayStock,
 				original_stock: originalStock,
+				stock_by_company: serverStock?.byCompany ?? item.stock_by_company,
+				outside_qty: serverStock?.outside ?? item.outside_qty,
 			};
 		});
 

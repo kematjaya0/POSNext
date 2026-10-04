@@ -561,6 +561,22 @@
 									}}</span
 								>
 							</p>
+							<p
+								v-if="stockBreakdown(item) || item.outside_qty > 0"
+								class="text-[8px] sm:text-[9px] text-gray-500 truncate leading-tight"
+							>
+								<span v-if="stockBreakdown(item)" class="font-mono">{{
+									stockBreakdown(item)
+								}}</span>
+								<span
+									v-if="item.outside_qty > 0"
+									class="text-orange-600 font-semibold"
+									:class="{ 'ms-1': stockBreakdown(item) }"
+									>{{
+										__("+{0} other wh", [Math.floor(item.outside_qty)])
+									}}</span
+								>
+							</p>
 						</div>
 					</div>
 				</div>
@@ -854,6 +870,23 @@
 								<span v-else class="text-xs sm:text-sm text-gray-400 italic">
 									{{ __("N/A") }}
 								</span>
+								<div
+									v-if="
+										!item.has_variants &&
+										(stockBreakdown(item) || item.outside_qty > 0)
+									"
+									class="text-[8px] sm:text-[10px] text-gray-500 leading-tight mt-0.5"
+								>
+									<div v-if="stockBreakdown(item)" class="font-mono">
+										{{ stockBreakdown(item) }}
+									</div>
+									<div
+										v-if="item.outside_qty > 0"
+										class="text-orange-600 font-semibold"
+									>
+										{{ __("+{0} other wh", [Math.floor(item.outside_qty)]) }}
+									</div>
+								</div>
 							</td>
 							<td
 								class="hidden md:table-cell px-2 sm:px-3 py-2 whitespace-nowrap md:w-[80px]"
@@ -1042,6 +1075,13 @@ const emit = defineEmits(["item-selected", "pos-order-scanned"]);
 
 // Use composables
 const { getStockStatus } = useStock();
+
+// "MJP 3 · BISC 5" when the branch (Warehouse Group) spans several companies
+function stockBreakdown(item) {
+	const byCompany = Object.entries(item.stock_by_company || {});
+	if (byCompany.length < 2) return "";
+	return byCompany.map(([abbr, qty]) => `${abbr} ${Math.floor(qty)}`).join(" · ");
+}
 const settingsStore = usePOSSettingsStore();
 const { showError, showWarning } = useToast();
 const { isAnyDialogOpen } = useDialogState();
@@ -1421,7 +1461,8 @@ function selectItem(item, autoAdd = false) {
 		settingsStore.shouldEnforceStockValidation() &&
 		shouldValidateItemStock(item)
 	) {
-		const qty = item.actual_qty ?? item.stock_qty ?? 0;
+		// Stock only in other session warehouses still opens the item dialog
+		const qty = (item.actual_qty ?? item.stock_qty ?? 0) + (item.outside_qty || 0);
 		if (qty <= 0) {
 			showError(
 				__('"{0}" is out of stock in warehouse "{1}".', [

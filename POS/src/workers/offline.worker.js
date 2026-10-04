@@ -179,6 +179,7 @@ let stockSyncInterval = null;
 let stockSyncEnabled = false;
 let stockSyncIntervalMs = 60000; // Default: 1 minute
 let currentWarehouse = null;
+let currentPosProfile = null; // scopes stock to the POS session (see get_session_stock)
 let trackedItemCodes = new Set(); // Items to sync
 let lastStockSyncTime = null;
 let stockSyncRunning = false;
@@ -1451,6 +1452,10 @@ async function updateStockQuantities(stockUpdates) {
 			item.actual_qty = actual_qty !== undefined ? actual_qty : stock_qty;
 			item.stock_qty = stock_qty !== undefined ? stock_qty : actual_qty;
 			item.warehouse = warehouse || item.warehouse;
+			// Session-wide breakdown (see get_session_stock), when the update has it
+			for (const key of ["stock_by_warehouse", "stock_by_company", "outside_qty"]) {
+				if (update[key] !== undefined) item[key] = update[key];
+			}
 
 			// Save updated item back to cache
 			await db.table("items").put(item);
@@ -1512,6 +1517,7 @@ async function fetchStockFromServer() {
 			body: JSON.stringify({
 				item_codes: JSON.stringify(itemCodes),
 				warehouse: currentWarehouse,
+				pos_profile: currentPosProfile,
 			}),
 			signal: controller.signal,
 		});
@@ -1636,8 +1642,13 @@ function stopPeriodicStockSync() {
 /**
  * Configure periodic stock sync
  */
-function configureStockSync({ warehouse, itemCodes, intervalMs }) {
+function configureStockSync({ warehouse, posProfile, itemCodes, intervalMs }) {
 	let restartNeeded = false;
+
+	if (posProfile !== undefined) {
+		currentPosProfile = posProfile;
+		restartNeeded = true;
+	}
 
 	if (warehouse !== undefined) {
 		currentWarehouse = warehouse;

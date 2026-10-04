@@ -5,7 +5,19 @@ import { offlineState } from "./offlineState";
 // Cache structure definition - modify this when cache structure changes
 const CACHE_STRUCTURE = {
 	// Define what gets cached
-	items: ["item_code", "item_name", "item_group", "barcodes", "price", "stock"],
+	// stock_by_* / outside_qty: session-wide stock (Warehouse Group) - older caches
+	// only hold the native warehouse's qty, so this change forces a re-sync
+	items: [
+		"item_code",
+		"item_name",
+		"item_group",
+		"barcodes",
+		"price",
+		"stock",
+		"stock_by_warehouse",
+		"stock_by_company",
+		"outside_qty",
+	],
 	customers: ["name", "customer_name", "mobile_no", "email_id"],
 	item_prices: ["price_list", "item_code", "price"],
 	local_stock: ["item_code", "warehouse", "actual_qty"],

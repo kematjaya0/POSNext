@@ -1230,7 +1230,12 @@ import { usePOSSyncStore } from "@/stores/posSync";
 import { usePOSUIStore } from "@/stores/posUI";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { logger } from "@/utils/logger";
-import { shouldValidateItemStock } from "@/utils/stockValidator";
+import {
+	cartStockQty,
+	hasWarehouseChoice,
+	pickSessionWarehouse,
+	shouldValidateItemStock,
+} from "@/utils/stockValidator";
 
 // Initialize stores
 const cartStore = usePOSCartStore();
@@ -1434,19 +1439,24 @@ onMounted(async () => {
 
 	// Set up real-time stock update listener
 	const cleanup = onStockUpdate(async (stockUpdates) => {
-		// Filter updates to only include items from our warehouse(s)
-		const profileWarehouses = shiftStore.profileWarehouse
-			? [shiftStore.profileWarehouse]
-			: warehousesList.value.map((w) => w.warehouse_name || w.name);
+		// Events carry one warehouse's raw qty; the grid shows the session-wide
+		// figure (Warehouse Group + other warehouses), so a sale in any session
+		// warehouse just triggers a re-fetch of the affected items.
+		const sessionWarehouses = await stockStore
+			.ensureScope(shiftStore.profileName)
+			.catch(() => new Set([shiftStore.profileWarehouse]));
 
-		const relevantUpdates = stockUpdates.filter((update) =>
-			profileWarehouses.includes(update.warehouse)
-		);
+		const itemCodes = [
+			...new Set(
+				stockUpdates
+					.filter((update) => sessionWarehouses.has(update.warehouse))
+					.map((update) => update.item_code)
+			),
+		];
 
-		if (relevantUpdates.length > 0) {
-			// Apply stock updates - Pinia auto-updates UI!
-			stockStore.update(relevantUpdates);
-			await offlineWorker.updateStockQuantities(relevantUpdates);
+		if (itemCodes.length > 0) {
+			// refresh() also writes the result to the offline cache
+			await stockStore.refresh(itemCodes, shiftStore.profileWarehouse);
 		}
 	});
 
@@ -1867,6 +1877,7 @@ async function setupPeriodicStockSync(warehouse) {
 		// Configure stock sync with warehouse and items
 		const config = await offlineWorker.configureStockSync({
 			warehouse,
+			posProfile: shiftStore.profileName,
 			itemCodes,
 			intervalMs: syncIntervalMs,
 		});
@@ -2036,6 +2047,47 @@ async function handleShiftClosed() {
 	}
 }
 
+/**
+ * Add to cart and point the row at one session warehouse. The cart keeps one
+ * row per item + UOM, so the warehouse - picked in the dialog, else by the
+ * tier rule for the row's new total - applies to the whole row. Splitting a
+ * row across warehouses is Fase 3 (auto-split).
+ */
+function addItemToSessionWarehouse(item, qty, autoAdd, warehouse = null) {
+	const factor = Number(item.conversion_factor) || 1;
+	const target =
+		warehouse ||
+		pickSessionWarehouse(
+			Object.entries(item.stock_by_warehouse || {}).map(([name, stockQty]) => ({
+				warehouse: name,
+				stock_qty: stockQty,
+			})),
+			cartStockQty(cartStore.invoiceItems, item.item_code) + qty * factor
+		) ||
+		item.warehouse;
+
+	// A hand-picked warehouse outside the branch is only offered when the branch
+	// falls short, so validate against branch + outside stock (the dialog
+	// already warned against that warehouse's own stock)
+	const isOutside = target && !(target in (item.stock_by_warehouse || {}));
+	const stockItem = isOutside
+		? { ...item, actual_qty: (item.actual_qty || 0) + (item.outside_qty || 0) }
+		: item;
+
+	cartStore.addItem(
+		{ ...stockItem, warehouse: target },
+		qty,
+		autoAdd,
+		shiftStore.currentProfile
+	);
+
+	const uom = item.uom || item.stock_uom;
+	const row = cartStore.invoiceItems.find(
+		(i) => i.item_code === item.item_code && i.uom === uom
+	);
+	if (row && target) row.warehouse = target;
+}
+
 function handleItemSelected(item, autoAdd = false) {
 	if (cartStore.posOrder) {
 		showWarning(
@@ -2059,14 +2111,9 @@ function handleItemSelected(item, autoAdd = false) {
 					price_list_rate: unitRate,
 					is_resolved_barcode: true, // Mark as readonly
 				};
-				cartStore.addItem(
-					resolvedItem,
-					item.resolved_qty,
-					true,
-					shiftStore.currentProfile
-				);
+				addItemToSessionWarehouse(resolvedItem, item.resolved_qty, true);
 			} else {
-				cartStore.addItem(item, 1, true, shiftStore.currentProfile);
+				addItemToSessionWarehouse(item, 1, true);
 			}
 		} catch (error) {
 			uiStore.showError(
@@ -2085,7 +2132,8 @@ function handleItemSelected(item, autoAdd = false) {
 		settingsStore.shouldEnforceStockValidation() &&
 		shouldValidateItemStock(item)
 	) {
-		const actualQty = item.actual_qty ?? item.stock_qty ?? 0;
+		// Stock only in other warehouses still opens the dialog to pick one
+		const actualQty = (item.actual_qty ?? item.stock_qty ?? 0) + (item.outside_qty || 0);
 		if (actualQty <= 0) {
 			uiStore.showError(
 				__("Insufficient Stock"),
@@ -2106,8 +2154,8 @@ function handleItemSelected(item, autoAdd = false) {
 		return;
 	}
 
-	// Check for UOMs
-	if (item.item_uoms && item.item_uoms.length > 0) {
+	// Check for UOMs - or several session warehouses to pick from (same dialog)
+	if ((item.item_uoms && item.item_uoms.length > 0) || hasWarehouseChoice(item)) {
 		cartStore.setPendingItem(item, 1, "uom");
 		uiStore.showItemSelectionDialog = true;
 		return;
@@ -2705,7 +2753,7 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+					addItemToSessionWarehouse(itemToAdd, qty, false, option.warehouse);
 					uiStore.showItemSelectionDialog = false;
 					cartStore.clearPendingItem();
 					showSuccess(__("{0} ({1}) added to cart", [itemToAdd.item_name, option.uom]));

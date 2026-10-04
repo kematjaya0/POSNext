@@ -259,6 +259,7 @@
 												:item-code="localItem?.item_code"
 												:uom="localUom"
 												:pos-profile="editItemPosProfile"
+												:qty="neededQty"
 												@update:model-value="handleWarehouseChange"
 											/>
 
@@ -501,7 +502,8 @@ import { usePOSSettingsStore } from "@/stores/posSettings";
 import { usePOSOffersStore } from "@/stores/posOffers";
 import { usePOSShiftStore } from "@/stores/posShift";
 import { useSerialNumberStore } from "@/stores/serialNumber";
-import { getItemStock } from "@/utils/stockValidator";
+import { cartStockQty, getItemStock } from "@/utils/stockValidator";
+import { usePOSCartStore } from "@/stores/posCart";
 import {
 	formatCurrency as formatCurrencyUtil,
 	getCurrencySymbol,
@@ -518,6 +520,7 @@ const settingsStore = usePOSSettingsStore();
 const offersStore = usePOSOffersStore();
 const shiftStore = usePOSShiftStore();
 const serialStore = useSerialNumberStore();
+const cartStore = usePOSCartStore();
 
 /**
  * True if this item currently qualifies for an active offer based on qty
@@ -708,6 +711,19 @@ const uomOptions = computed(() => {
 const editItemPosProfile = computed(
 	() => settingsStore.settings?.pos_profile || localItem.value?.pos_profile
 );
+
+// What the branch must cover in the edited UOM: this row's qty plus the
+// item's other cart rows (props.item is a copy of the row, so its own
+// original qty is taken back out) - gates WarehouseStockList's outside tier
+const neededQty = computed(() => {
+	const otherRows =
+		cartStockQty(cartStore.invoiceItems, localItem.value?.item_code) -
+		(Number(props.item?.quantity) || 0) * (Number(props.item?.conversion_factor) || 1);
+	return (
+		(Number(localQuantity.value) || 0) +
+		Math.max(otherRows, 0) / getConversionFactorForUom(localUom.value)
+	);
+});
 
 const discountTypeOptions = computed(() => [
 	{ value: "percentage", label: __("Percentage (%)") },

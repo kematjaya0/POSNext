@@ -1502,3 +1502,8 @@
 "No add on available for this item in this warehouse.","Tidak ada add on untuk item ini di gudang ini.",""
 "Refund (max {0})","Dikembalikan (maks {0})",""
 "Search add on...","Cari add on...",""
+"+{0} other wh","+{0} gdg lain",""
+"Other Warehouses","Gudang Lain",""
+"Branch stock is short - pick up from the warehouse","Stok cabang kurang - ambil dari gudang",""
+"Only when branch stock is short ({0})","Hanya bila stok cabang kurang ({0})",""
+"Item Stock","Stok Item",""

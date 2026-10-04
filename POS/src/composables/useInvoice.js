@@ -982,6 +982,8 @@ export function useInvoice() {
 			is_rate_manually_edited: item.is_rate_manually_edited || 0,
 			original_rate: item.original_rate || null,
 			is_free_item: item.is_free_item || 0,
+			// Picked by the cashier: the server must not re-allocate this row
+			warehouse_manual: item.warehouse_manual ? 1 : 0,
 		});
 
 		const out = [];
@@ -1031,6 +1033,7 @@ export function useInvoice() {
 						is_rate_manually_edited: 0,
 						original_rate: null,
 						is_free_item: 1,
+						warehouse_manual: item.warehouse_manual ? 1 : 0,
 					});
 				}
 			}
@@ -1208,7 +1211,8 @@ export function useInvoice() {
 		deliveryDate = null,
 		writeOffAmount = 0,
 		isCreditSale = false,
-		receivableAccount = null
+		receivableAccount = null,
+		directSubmit = false
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -1275,17 +1279,23 @@ export function useInvoice() {
 					}));
 				}
 
-				const draftInvoice = await updateInvoiceResource.submit({
-					data: invoiceData,
-				});
+				// A multi-company session sends the basket unsaved: the server
+				// allocates it and may bill several companies (split_invoice.py),
+				// which a single-company draft cannot hold.
+				let invoiceDoc = invoiceData;
+				if (!directSubmit) {
+					const draftInvoice = await updateInvoiceResource.submit({
+						data: invoiceData,
+					});
 
-				let invoiceDoc = draftInvoice;
-				if (draftInvoice && typeof draftInvoice === "object" && "data" in draftInvoice) {
-					invoiceDoc = draftInvoice.data;
-				}
+					invoiceDoc = draftInvoice;
+					if (draftInvoice && typeof draftInvoice === "object" && "data" in draftInvoice) {
+						invoiceDoc = draftInvoice.data;
+					}
 
-				if (!invoiceDoc || !invoiceDoc.name) {
-					throw new Error("Failed to create draft invoice - no invoice name returned");
+					if (!invoiceDoc || !invoiceDoc.name) {
+						throw new Error("Failed to create draft invoice - no invoice name returned");
+					}
 				}
 
 				const submitData = {

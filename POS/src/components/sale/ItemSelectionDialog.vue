@@ -186,6 +186,7 @@
 						:qty="neededQty"
 						auto-select
 						@warehouse-stock="selectedWarehouseStock = $event"
+						@picked-by-hand="warehouseManual = $event"
 					/>
 
 					<!-- Quantity Control -->
@@ -411,6 +412,7 @@ const options = ref([]);
 const selectedOption = ref(null);
 const selectedWarehouse = ref("");
 const selectedWarehouseStock = ref(null);
+const warehouseManual = ref(false);
 const quantity = ref(1);
 const selectedAttributes = ref({}); // For variant attribute selection
 const quantityInput = ref(null);
@@ -737,6 +739,7 @@ function confirm() {
 			option.quantity = quantity.value;
 			if (selectedWarehouse.value) {
 				option.warehouse = selectedWarehouse.value;
+				option.warehouse_manual = warehouseManual.value;
 			}
 		}
 		emit("option-selected", option);

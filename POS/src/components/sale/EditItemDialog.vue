@@ -261,6 +261,7 @@
 												:pos-profile="editItemPosProfile"
 												:qty="neededQty"
 												@update:model-value="handleWarehouseChange"
+												@picked-by-hand="warehousePickedByHand = $event"
 											/>
 
 											<!-- Serial Numbers Section (only for serial items) -->
@@ -584,6 +585,8 @@ const localQuantity = ref(1);
 const localUom = ref("");
 const localRate = ref(0);
 const localWarehouse = ref("");
+// The cashier chose the warehouse here: the row stops being auto-allocated
+const warehousePickedByHand = ref(false);
 const discountType = ref("percentage");
 const discountValue = ref(0);
 const calculatedSubtotal = ref(0);
@@ -1112,6 +1115,7 @@ function updateItem() {
 		// Preserve price_list_rate for reference (original price before any manual edits)
 		price_list_rate: originalPriceListRate.value,
 		warehouse: localWarehouse.value,
+		warehouse_manual: Boolean(localItem.value.warehouse_manual || warehousePickedByHand.value),
 		discount_percentage: discountPercentage,
 		discount_amount: discountAmount,
 		discount_source:

@@ -143,11 +143,12 @@ const props = defineProps({
 	autoSelect: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:modelValue", "warehouse-stock"]);
+const emit = defineEmits(["update:modelValue", "warehouse-stock", "picked-by-hand"]);
 
 const warehouses = ref([]);
 const loading = ref(false);
 const pickedByHand = ref(false);
+watch(pickedByHand, (value) => emit("picked-by-hand", value), { immediate: true });
 
 const showList = computed(() => warehouses.value.length > 1);
 

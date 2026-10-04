@@ -5,6 +5,7 @@ import { usePOSShiftStore } from "@/stores/posShift";
 import { parseError } from "@/utils/errorHandler";
 import { unwrapCouponValidation } from "@/utils/invoice";
 import { shouldValidateItemStock, checkStockAvailability } from "@/utils/stockValidator";
+import { previewSaleSplit } from "@/utils/saleSplit";
 import { offlineState } from "@/utils/offline/offlineState";
 import { useToast } from "@/composables/useToast";
 import { useStockStore } from "@/stores/stock";
@@ -190,6 +191,30 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const isEmpty = computed(() => invoiceItems.value.length === 0);
 	const hasCustomer = computed(() => !!customer.value);
 
+	// Branch warehouses / companies the session sells from (saleSplit preview)
+	watch(
+		posProfile,
+		(profile) => {
+			if (profile) stockStore.ensureScope(profile).catch(() => {});
+		},
+		{ immediate: true }
+	);
+
+	// Where each row ships from and how many invoices the sale becomes; the
+	// server makes the final call on submit (pos_next/api/split_invoice.py).
+	const saleSplit = computed(() =>
+		previewSaleSplit(invoiceItems.value, stockStore.scope, stockStore.getStockByWarehouse)
+	);
+
+	// The session sells stock of several companies: submit goes straight to the
+	// server split instead of saving a single-company draft first.
+	const isMultiCompanySession = computed(
+		() =>
+			new Set(
+				Object.values(stockStore.scope.companyByWarehouse || {}).map((info) => info.company)
+			).size > 1
+	);
+
 	// Actions
 	function addItem(item, qty = 1, _autoAdd = false, currentProfile = null) {
 		if (
@@ -311,7 +336,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			deliveryDate.value,
 			writeOffAmount.value,
 			Boolean(options.isCreditSale),
-			options.receivableAccount || null
+			options.receivableAccount || null,
+			isMultiCompanySession.value && targetDoctype.value === "Sales Invoice"
 		);
 		// Reset write-off amount after successful submission
 		if (result) {
@@ -2287,6 +2313,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// Apply other updates
 			if (updates.quantity !== undefined) cartItem.quantity = updates.quantity;
 			if (updates.warehouse !== undefined) cartItem.warehouse = updates.warehouse;
+			if (updates.warehouse_manual) cartItem.warehouse_manual = true;
 			if (updates.discount_percentage !== undefined)
 				cartItem.discount_percentage = updates.discount_percentage;
 			if (updates.discount_amount !== undefined)
@@ -2848,6 +2875,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		isEmpty,
 		hasCustomer,
 		isProcessingOffers, // True when any offer operation is in progress
+		saleSplit,
+		isMultiCompanySession,
 		isSubmitting, // True when invoice submission is in progress (mutex protected)
 
 		// Actions

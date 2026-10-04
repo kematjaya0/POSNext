@@ -981,7 +981,9 @@
 						</div>
 						<h3 class="mt-4 text-lg font-medium text-gray-900">
 							{{
-								__("Invoice {0} created successfully!", [uiStore.lastInvoiceName])
+								__("Invoice {0} created successfully!", [
+									uiStore.lastInvoiceNames.join(" + "),
+								])
 							}}
 						</h3>
 						<p class="mt-2 text-sm text-gray-500">
@@ -999,7 +1001,7 @@
 							theme="blue"
 							@click="
 								() => {
-									handlePrintInvoice({ name: uiStore.lastInvoiceName });
+									printInvoices(uiStore.lastInvoiceNames);
 									uiStore.showSuccessDialog = false;
 								}
 							"
@@ -1128,6 +1130,8 @@ import { parseError } from "@/utils/errorHandler";
 import { cleanupUserSession } from "@/utils/sessionCleanup";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
+import { roundCurrency } from "@/utils/currency";
+import { splitSubmissionItems } from "@/utils/saleSplit";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import {
 	hydrateLocalOnlyInvoice,
@@ -2049,13 +2053,20 @@ async function handleShiftClosed() {
 
 /**
  * Add to cart and point the row at one session warehouse. The cart keeps one
- * row per item + UOM, so the warehouse - picked in the dialog, else by the
- * tier rule for the row's new total - applies to the whole row. Splitting a
- * row across warehouses is Fase 3 (auto-split).
+ * row per item + UOM. A warehouse the cashier picked by hand (`manual`) pins
+ * the whole row; otherwise the row is spread over the branch warehouses on
+ * submit (saleSplit.js preview, split_invoice.py decides) and `warehouse` is
+ * just the tier rule's pick for the row's new total.
  */
-function addItemToSessionWarehouse(item, qty, autoAdd, warehouse = null) {
+function addItemToSessionWarehouse(item, qty, autoAdd, warehouse = null, manual = false) {
 	const factor = Number(item.conversion_factor) || 1;
+	const uom = item.uom || item.stock_uom;
+	const existing = cartStore.invoiceItems.find(
+		(i) => i.item_code === item.item_code && i.uom === uom
+	);
+	const keepPinned = !manual && existing?.warehouse_manual;
 	const target =
+		(keepPinned && existing.warehouse) ||
 		warehouse ||
 		pickSessionWarehouse(
 			Object.entries(item.stock_by_warehouse || {}).map(([name, stockQty]) => ({
@@ -2081,11 +2092,11 @@ function addItemToSessionWarehouse(item, qty, autoAdd, warehouse = null) {
 		shiftStore.currentProfile
 	);
 
-	const uom = item.uom || item.stock_uom;
 	const row = cartStore.invoiceItems.find(
 		(i) => i.item_code === item.item_code && i.uom === uom
 	);
 	if (row && target) row.warehouse = target;
+	if (row && manual) row.warehouse_manual = true;
 }
 
 function handleItemSelected(item, autoAdd = false) {
@@ -2522,8 +2533,12 @@ async function handlePaymentCompleted(paymentData) {
 				status: Math.max(0, grandTotal - paidAmount) < 0.01 ? "Paid" : "Unpaid",
 				docstatus: 0,
 			};
-			uiStore.setLastOfflinePrintDoc(offlinePrintDoc);
-			cacheOfflineReceiptPayload(offlineReceiptName, offlinePrintDoc);
+			// A sale billed to several companies prints one temporary receipt per
+			// company, split as previewed; the server re-checks it on sync.
+			const receiptDocs = splitOfflineReceipt(offlinePrintDoc, preparedItems);
+			receiptDocs.forEach((doc) => cacheOfflineReceiptPayload(doc.name, doc));
+			const receiptNames = receiptDocs.map((doc) => doc.name);
+			uiStore.setLastOfflinePrintDoc(receiptDocs[0]);
 			uiStore.showPaymentDialog = false;
 			cartStore.clearCart();
 			// Reset cart hash after successful payment
@@ -2536,16 +2551,16 @@ async function handlePaymentCompleted(paymentData) {
 
 			if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 				try {
-					await handlePrintInvoice({ name: offlineReceiptName });
+					for (const name of receiptNames) await handlePrintInvoice({ name });
 					showSuccess(
 						__(
 							"Invoice {0} saved offline and sent to printer — will sync when online",
-							[offlineReceiptName]
+							[receiptNames.join(" + ")]
 						)
 					);
 				} catch (error) {
 					log.error("Offline auto-print error:", error);
-					uiStore.showSuccess(offlineReceiptName, grandTotal, paymentData.paid_amount);
+					uiStore.showSuccess(receiptNames, grandTotal, paymentData.paid_amount);
 					showWarning(
 						__(
 							"Invoice {0} saved offline but print failed — open Print from the success dialog",
@@ -2554,7 +2569,7 @@ async function handlePaymentCompleted(paymentData) {
 					);
 				}
 			} else {
-				uiStore.showSuccess(offlineReceiptName, grandTotal, paymentData.paid_amount);
+				uiStore.showSuccess(receiptNames, grandTotal, paymentData.paid_amount);
 				showSuccess(__("Invoice saved offline. Will sync when online"));
 			}
 		} else {
@@ -2606,7 +2621,15 @@ async function handlePaymentCompleted(paymentData) {
 				}
 
 				const invoiceName = result.name || result.message?.name || __("Unknown");
-				const invoiceTotal = result.grand_total || result.total || 0;
+				// A split sale returns every invoice it created (split_invoice.py)
+				const invoices = result.invoices?.length
+					? result.invoices
+					: [{ ...result, name: invoiceName }];
+				const invoiceNames = invoices.map((invoice) => invoice.name);
+				const invoiceTotal = invoices.reduce(
+					(sum, invoice) => sum + (invoice.grand_total || invoice.total || 0),
+					0
+				);
 				const paidAmount = paymentData.paid_amount || invoiceTotal;
 
 				uiStore.showPaymentDialog = false;
@@ -2629,15 +2652,19 @@ async function handlePaymentCompleted(paymentData) {
 
 				if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 					try {
-						await handlePrintInvoice({ name: invoiceName });
-						showSuccess(__("Invoice {0} created and sent to printer", [invoiceName]));
+						for (const name of invoiceNames) await handlePrintInvoice({ name });
+						showSuccess(
+							__("Invoice {0} created and sent to printer", [invoiceNames.join(" + ")])
+						);
 					} catch (error) {
 						log.error("Auto-print error:", error);
-						showWarning(__("Invoice {0} created but print failed", [invoiceName]));
+						showWarning(
+							__("Invoice {0} created but print failed", [invoiceNames.join(" + ")])
+						);
 					}
 				} else {
-					uiStore.showSuccess(invoiceName, invoiceTotal, paidAmount);
-					showSuccess(__("Invoice {0} created successfully", [invoiceName]));
+					uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount);
+					showSuccess(__("Invoice {0} created successfully", [invoiceNames.join(" + ")]));
 				}
 			}
 		}
@@ -2753,7 +2780,13 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					addItemToSessionWarehouse(itemToAdd, qty, false, option.warehouse);
+					addItemToSessionWarehouse(
+						itemToAdd,
+						qty,
+						false,
+						option.warehouse,
+						Boolean(option.warehouse_manual)
+					);
 					uiStore.showItemSelectionDialog = false;
 					cartStore.clearPendingItem();
 					showSuccess(__("{0} ({1}) added to cart", [itemToAdd.item_name, option.uom]));
@@ -3367,6 +3400,50 @@ async function loadInvoiceHistoryData() {
 function handleViewInvoice(invoice) {
 	selectedInvoiceForView.value = invoice.name || invoice;
 	showInvoiceDetail.value = true;
+}
+
+async function printInvoices(names) {
+	for (const name of names) await handlePrintInvoice({ name });
+}
+
+/**
+ * Temporary offline receipts: one per company the sale bills (saleSplit
+ * preview), named `<offline id>-<abbr>`. Totals are shared out by each
+ * company's net; the session company's receipt carries the change.
+ */
+function splitOfflineReceipt(doc, preparedItems) {
+	const split = cartStore.saleSplit;
+	const isSplit =
+		split.groups.length > 1 || (split.groups[0] && split.groups[0].company !== split.company);
+	if (!isSplit) return [doc];
+
+	const groups = splitSubmissionItems(preparedItems, split);
+	const nets = groups.map((group) =>
+		group.items.reduce((sum, row) => sum + (Number(row.qty) || 0) * (Number(row.rate) || 0), 0)
+	);
+	const totalNet = nets.reduce((sum, net) => sum + net, 0) || 1;
+	const totals = nets.map((net) => roundCurrency((doc.grand_total * net) / totalNet));
+	const othersTotal = totals.slice(1).reduce((sum, total) => sum + total, 0);
+	totals[0] = roundCurrency(doc.grand_total - othersTotal);
+
+	return groups.map((group, index) => {
+		const paid = index ? totals[index] : roundCurrency(doc.paid_amount - othersTotal);
+		return {
+			...doc,
+			name: `${doc.name}-${group.abbr}`,
+			company: group.company,
+			items: group.items.map((item) => ({ ...item, quantity: item.qty })),
+			grand_total: totals[index],
+			total_taxes_and_charges: roundCurrency(
+				((doc.total_taxes_and_charges || 0) * nets[index]) / totalNet
+			),
+			payments: [],
+			paid_amount: paid,
+			change_amount: index ? 0 : doc.change_amount,
+			outstanding_amount: Math.max(0, totals[index] - paid),
+			status: Math.max(0, totals[index] - paid) < 0.01 ? "Paid" : "Unpaid",
+		};
+	});
 }
 
 // Centralized print handler - uses printInvoice.js utilities

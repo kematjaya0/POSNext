@@ -1329,6 +1329,15 @@
 								</div>
 							</div>
 
+							<!-- Warehouses the row ships from (saleSplit preview) -->
+							<div
+								v-if="rowAllocation(item)"
+								class="ps-3 mt-0.5 text-[11px] sm:text-xs text-amber-700 truncate"
+								:title="rowAllocation(item).title"
+							>
+								{{ rowAllocation(item).label }}
+							</div>
+
 							<!-- Add ons (e.g. tinta), indented under their base line -->
 							<div
 								v-for="addon in item.addons || []"
@@ -1478,6 +1487,21 @@
 				</div>
 			</div>
 
+			<!-- The sale is billed to several companies (or another one) -->
+			<div
+				v-if="splitGroups.length"
+				class="mb-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800"
+			>
+				<div class="font-semibold">
+					{{ __("This sale becomes {0} invoices", [splitGroups.length]) }}
+				</div>
+				<div class="flex flex-wrap gap-x-3">
+					<span v-for="group in splitGroups" :key="group.company" :title="group.company">
+						{{ group.abbr }} ≈ {{ formatCurrency(group.amount) }}
+					</span>
+				</div>
+			</div>
+
 			<!-- Grand Total -->
 			<div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-2.5 mb-1.5">
 				<div class="flex items-center justify-between">
@@ -1582,6 +1606,7 @@ import { isOffline } from "@/utils/offline";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { logger } from "@/utils/logger";
 import { getAvailableAddons } from "@/utils/itemAddons";
+import { saleRowKey } from "@/utils/saleSplit";
 import { FeatherIcon } from "frappe-ui";
 
 const log = logger.create("InvoiceCart");
@@ -1595,6 +1620,25 @@ import EditItemDialog from "./EditItemDialog.vue";
  * ============================================================================
  */
 const cartStore = usePOSCartStore(); // Pinia store for cart state management
+
+// Companies the sale is billed to, when it is not just the session's own
+const splitGroups = computed(() => {
+	const { groups, company } = cartStore.saleSplit;
+	return groups.length > 1 || groups[0]?.company !== company ? groups : [];
+});
+
+function rowAllocation(item) {
+	const chunks = cartStore.saleSplit.rows.get(saleRowKey(item));
+	if (!chunks?.length) return null;
+	if (chunks.length === 1 && chunks[0].company === cartStore.saleSplit.company) return null;
+	const qty = (value) => (Number.isInteger(value) ? value : Number(value).toFixed(2));
+	// Company abbr is enough when the warehouses belong to different companies
+	const byCompany = new Set(chunks.map((c) => c.company)).size > 1;
+	return {
+		label: chunks.map((c) => `${byCompany ? c.abbr : c.warehouse} ${qty(c.qty)}`).join(" · "),
+		title: chunks.map((c) => `${c.warehouse}: ${qty(c.qty)}`).join("\n"),
+	};
+}
 
 const settingsStore = usePOSSettingsStore(); // Pinia store for POS settings
 const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions

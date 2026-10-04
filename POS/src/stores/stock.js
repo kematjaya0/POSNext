@@ -35,14 +35,17 @@ export const useStockStore = defineStore("stock", () => {
 	// ========================================================================
 	// STATE - Just 2 Maps, that's it!
 	// ========================================================================
-	// item_code -> { qty, warehouse, ts, byCompany, outside }
-	// qty is the branch total (Warehouse Group); byCompany its split per company
-	// abbr, outside what the branch's companies hold in other warehouses.
+	// item_code -> { qty, warehouse, ts, byWarehouse, byCompany, outside }
+	// qty is the branch total (Warehouse Group); byWarehouse / byCompany its
+	// split per branch warehouse / company abbr, outside what the branch's
+	// companies hold in other warehouses.
 	const server = ref(new Map());
 	const reserved = ref(new Map()); // item_code -> qty
 	const warehouse = ref(null); // Current warehouse
 	const refreshing = ref(false); // Loading state
 	let sessionScope = null; // { profile, warehouses: Set } - see ensureScope()
+	// { native, company, companyByWarehouse } of the session - saleSplit.js
+	const scope = ref({ native: null, company: null, companyByWarehouse: {} });
 
 	// ========================================================================
 	// GETTERS - Functions that return reactive computed values
@@ -63,9 +66,13 @@ export const useStockStore = defineStore("stock", () => {
 		outside: server.value.get(itemCode)?.outside || 0,
 	});
 
+	// Server stock (stock UOM) per branch warehouse, cart reservations not deducted
+	const getStockByWarehouse = (itemCode) => server.value.get(itemCode)?.byWarehouse || {};
+
 	const toEntry = (row, qty) => ({
 		qty,
 		warehouse: row.warehouse || warehouse.value,
+		byWarehouse: row.stock_by_warehouse || {},
 		byCompany: row.stock_by_company || {},
 		outside: row.outside_qty || 0,
 		ts: Date.now(),
@@ -124,13 +131,31 @@ export const useStockStore = defineStore("stock", () => {
 	const ensureScope = async (profile) => {
 		if (!profile) return new Set();
 		if (sessionScope?.profile === profile) return sessionScope.warehouses;
-		const response = await call("pos_next.api.items.get_session_warehouses", {
-			pos_profile: profile,
-		});
-		const scope = response?.message || response || {};
+		const cacheKey = `pos_next_session_scope:${profile}`;
+		let data;
+		try {
+			const response = await call("pos_next.api.items.get_session_warehouses", {
+				pos_profile: profile,
+			});
+			data = response?.message || response || {};
+			try {
+				localStorage.setItem(cacheKey, JSON.stringify(data));
+			} catch {}
+		} catch (error) {
+			// Offline: the last scope seen keeps the sale-split preview working
+			try {
+				data = JSON.parse(localStorage.getItem(cacheKey) || "null");
+			} catch {}
+			if (!data) throw error;
+		}
 		sessionScope = {
 			profile,
-			warehouses: new Set([...(scope.branch || []), ...(scope.outside || [])]),
+			warehouses: new Set([...(data.branch || []), ...(data.outside || [])]),
+		};
+		scope.value = {
+			native: data.native || null,
+			company: data.company || null,
+			companyByWarehouse: data.company_by_warehouse || {},
 		};
 		return sessionScope.warehouses;
 	};
@@ -204,10 +229,12 @@ export const useStockStore = defineStore("stock", () => {
 		reserved,
 		warehouse,
 		refreshing,
+		scope,
 
 		// Getters
 		getDisplayStock,
 		getStockInfo,
+		getStockByWarehouse,
 
 		// Actions
 		init,

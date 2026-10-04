@@ -1,0 +1,137 @@
+import { describe, expect, it } from "vitest";
+
+import { allocateQty, previewSaleSplit, saleRowKey, splitSubmissionItems } from "../saleSplit";
+
+const scope = {
+	native: "UTAMA - MJP",
+	company: "MJP PT",
+	companyByWarehouse: {
+		"UTAMA - MJP": { company: "MJP PT", abbr: "MJP" },
+		"UTAMA - BISC": { company: "BISC CV", abbr: "BISC" },
+	},
+};
+
+const stock = {
+	A: { "UTAMA - MJP": 20, "UTAMA - BISC": 10 },
+	B: { "UTAMA - MJP": 0, "UTAMA - BISC": 5 },
+};
+const stockOf = (code) => stock[code] || {};
+
+const row = (overrides) => ({
+	item_code: "A",
+	uom: "PCS",
+	quantity: 1,
+	conversion_factor: 1,
+	warehouse: "UTAMA - MJP",
+	amount: 100,
+	...overrides,
+});
+
+describe("allocateQty", () => {
+	it("fills the first warehouse before spilling", () => {
+		const remaining = { W1: 3, W2: 10 };
+		expect(allocateQty(5, 1, ["W1", "W2"], remaining)).toEqual([
+			{ warehouse: "W1", qty: 3 },
+			{ warehouse: "W2", qty: 2 },
+		]);
+		expect(remaining).toEqual({ W1: 0, W2: 8 });
+	});
+
+	it("leaves a shortfall on the first warehouse", () => {
+		expect(allocateQty(5, 1, ["W1", "W2"], { W1: 1, W2: 1 })).toEqual([
+			{ warehouse: "W1", qty: 4 },
+			{ warehouse: "W2", qty: 1 },
+		]);
+	});
+
+	it("draws stock in stock UOM", () => {
+		expect(allocateQty(2, 12, ["W1", "W2"], { W1: 12, W2: 24 })).toEqual([
+			{ warehouse: "W1", qty: 1 },
+			{ warehouse: "W2", qty: 1 },
+		]);
+	});
+});
+
+describe("previewSaleSplit", () => {
+	it("keeps a basket the session warehouse covers on one invoice", () => {
+		const split = previewSaleSplit([row({ quantity: 5 })], scope, stockOf);
+		expect(split.groups.map((g) => g.company)).toEqual(["MJP PT"]);
+	});
+
+	it("spills a row over the branch and splits the sale per company", () => {
+		const cart = [row({ quantity: 25, amount: 2500 })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		expect(split.rows.get(saleRowKey(cart[0])).map((c) => [c.abbr, c.qty])).toEqual([
+			["MJP", 20],
+			["BISC", 5],
+		]);
+		expect(split.groups).toEqual([
+			{ company: "MJP PT", abbr: "MJP", amount: 2000 },
+			{ company: "BISC CV", abbr: "BISC", amount: 500 },
+		]);
+	});
+
+	it("never moves a row the cashier pinned", () => {
+		const cart = [row({ item_code: "B", quantity: 2, warehouse_manual: true })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		expect(split.groups.map((g) => g.abbr)).toEqual(["MJP"]);
+	});
+
+	it("bills add ons with the row's first chunk", () => {
+		const cart = [row({ item_code: "B", quantity: 2, addons: [{ amount: 30 }] })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		expect(split.groups).toEqual([{ company: "BISC CV", abbr: "BISC", amount: 130 }]);
+		expect(split.company).toBe("MJP PT");
+	});
+
+	it("rows of the same item share one stock balance", () => {
+		const cart = [row({ quantity: 15 }), row({ quantity: 10, uom: "PCS2" })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		expect(split.rows.get(saleRowKey(cart[1])).map((c) => [c.abbr, c.qty])).toEqual([
+			["MJP", 5],
+			["BISC", 5],
+		]);
+	});
+
+	it("is empty when the branch has a single warehouse", () => {
+		const single = {
+			...scope,
+			companyByWarehouse: { "UTAMA - MJP": scope.companyByWarehouse["UTAMA - MJP"] },
+		};
+		expect(previewSaleSplit([row()], single, stockOf).groups).toEqual([]);
+	});
+});
+
+describe("splitSubmissionItems", () => {
+	it("splits submission rows per company with add ons on the base's company", () => {
+		const cart = [row({ quantity: 25, amount: 2500 })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		const items = [
+			{
+				item_code: "A",
+				uom: "PCS",
+				qty: 25,
+				rate: 100,
+				discount_amount: 50,
+				custom_addon_key: "k1",
+			},
+			{ item_code: "INK", qty: 1, rate: 30, custom_addon_parent_key: "k1" },
+		];
+		const groups = splitSubmissionItems(items, split);
+		expect(
+			groups.map((g) => [
+				g.abbr,
+				g.items.map((i) => [i.item_code, i.qty, i.discount_amount]),
+			])
+		).toEqual([
+			[
+				"MJP",
+				[
+					["A", 20, 40],
+					["INK", 1, undefined],
+				],
+			],
+			["BISC", [["A", 5, 10]]],
+		]);
+	});
+});

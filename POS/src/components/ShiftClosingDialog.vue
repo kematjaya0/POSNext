@@ -213,10 +213,30 @@
 						</button>
 
 						<div v-show="showInvoiceDetails" class="border-t border-gray-200">
+							<div
+								v-for="company in companiesWithTransactions"
+								:key="company.company"
+								class="border-b border-gray-200 last:border-b-0"
+							>
+							<div
+								class="px-3 py-2 md:px-6 bg-gray-100 flex items-center justify-between gap-2"
+							>
+								<span class="text-start text-xs md:text-sm font-semibold text-gray-800">
+									{{ company.company }}
+								</span>
+								<span class="text-xs md:text-sm text-gray-600">
+									{{
+										__("{0} transactions • {1}", [
+											company.pos_transactions.length,
+											formatCurrency(company.grand_total),
+										])
+									}}
+								</span>
+							</div>
 							<!-- Mobile Card View -->
 							<div class="md:hidden divide-y divide-gray-200">
 								<div
-									v-for="(invoice, idx) in closingData.pos_transactions"
+									v-for="(invoice, idx) in company.pos_transactions"
 									:key="idx"
 									:class="[
 										'p-3',
@@ -274,7 +294,7 @@
 											__("Net Total:")
 										}}</span>
 										<span class="text-sm font-bold text-gray-900">
-											{{ formatCurrency(closingData.grand_total) }}
+											{{ formatCurrency(company.grand_total) }}
 										</span>
 									</div>
 								</div>
@@ -314,7 +334,7 @@
 									</thead>
 									<tbody class="bg-white divide-y divide-gray-200">
 										<tr
-											v-for="(invoice, idx) in closingData.pos_transactions"
+											v-for="(invoice, idx) in company.pos_transactions"
 											:key="idx"
 											:class="
 												invoice.is_return
@@ -386,12 +406,13 @@
 											</td>
 											<td class="px-6 py-4 whitespace-nowrap text-start">
 												<span class="text-base font-bold text-gray-900">
-													{{ formatCurrency(closingData.grand_total) }}
+													{{ formatCurrency(company.grand_total) }}
 												</span>
 											</td>
 										</tr>
 									</tfoot>
 								</table>
+							</div>
 							</div>
 						</div>
 					</div>
@@ -452,9 +473,16 @@
 						<div class="p-3 md:p-6">
 							<!-- ENTRY MODE: Simple blind input list (when hideExpectedAmount is enabled and not showing report) -->
 							<div v-if="isInEntryMode" class="flex flex-col gap-3 md:gap-4">
+								<template
+									v-for="(company, cIdx) in closingData.companies"
+									:key="company.company"
+								>
+								<h4 class="text-start text-sm md:text-base font-semibold text-gray-800">
+									{{ company.company }}
+								</h4>
 								<div
-									v-for="(payment, idx) in closingData.payment_reconciliation"
-									:key="idx"
+									v-for="(payment, idx) in company.payment_reconciliation"
+									:key="`${cIdx}-${idx}`"
 									class="border border-gray-200 rounded-lg p-3 md:p-4 bg-white hover:border-gray-300 transition-colors"
 								>
 									<div class="flex items-center justify-between gap-3">
@@ -471,7 +499,7 @@
 												}}</span>
 											</div>
 											<label
-												:for="`payment-${idx}`"
+												:for="`payment-${cIdx}-${idx}`"
 												class="text-start text-sm md:text-base font-semibold text-gray-900 cursor-pointer"
 											>
 												{{ payment.mode_of_payment }}
@@ -481,7 +509,7 @@
 										<!-- Simple Input with Native Arrows -->
 										<div class="w-40 md:w-48">
 											<Input
-												:id="`payment-${idx}`"
+												:id="`payment-${cIdx}-${idx}`"
 												:modelValue="payment.closing_amount"
 												@update:modelValue="
 													(value) => updateClosingAmount(payment, value)
@@ -493,7 +521,7 @@
 												:disabled="submitResource.loading"
 												:aria-label="
 													__('Enter actual amount for {0}', [
-														payment.mode_of_payment,
+														`${company.company} ${payment.mode_of_payment}`,
 													])
 												"
 												class="text-base md:text-lg text-center font-semibold"
@@ -501,6 +529,7 @@
 										</div>
 									</div>
 								</div>
+								</template>
 							</div>
 
 							<!-- REVIEW MODE: Full payment method cards (when not in entry mode) -->
@@ -552,9 +581,26 @@
 					</div>
 				</div>
 
+				<template
+									v-for="company in closingData.companies"
+									:key="company.company"
+								>
+								<div
+									class="flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-200 pb-2"
+								>
+									<h4 class="text-start text-sm md:text-base font-semibold text-gray-800">
+										{{ company.company }}
+									</h4>
+									<span class="text-xs md:text-sm text-gray-600">
+										{{ __("Expected") }}
+										{{ formatCurrency(sumPayments(company, "expected_amount")) }}
+										· {{ __("Actual") }}
+										{{ formatCurrency(sumPayments(company, "closing_amount")) }}
+									</span>
+								</div>
 				<div
-									v-for="(payment, idx) in closingData.payment_reconciliation"
-									:key="idx"
+									v-for="(payment, idx) in company.payment_reconciliation"
+									:key="`${company.company}-${idx}`"
 									:class="[
 										'border rounded-lg p-3 md:p-5 transition-all',
 										payment.difference === 0
@@ -783,6 +829,7 @@
 										</div>
 									</div>
 								</div>
+								</template>
 							</div>
 						</div>
 
@@ -837,9 +884,7 @@
 
 					<!-- Tax Summary (hidden in entry mode when hideExpectedAmount is enabled) -->
 					<div
-						v-if="
-							shouldShowSummary && closingData.taxes && closingData.taxes.length > 0
-						"
+						v-if="shouldShowSummary && companiesWithTaxes.length > 0"
 						class="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm"
 					>
 						<div class="px-3 py-3 md:px-6 md:py-4 bg-gray-50 border-b border-gray-200">
@@ -848,9 +893,16 @@
 							</h3>
 						</div>
 						<div class="p-3 md:p-6">
-							<div class="flex flex-col gap-2 md:gap-3">
+							<div
+								v-for="company in companiesWithTaxes"
+								:key="company.company"
+								class="flex flex-col gap-2 md:gap-3 mb-3 md:mb-4 last:mb-0"
+							>
+								<h4 class="text-start text-xs md:text-sm font-semibold text-gray-800">
+									{{ company.company }}
+								</h4>
 								<div
-									v-for="(tax, idx) in closingData.taxes"
+									v-for="(tax, idx) in company.taxes"
 									:key="idx"
 									class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
 								>
@@ -1027,6 +1079,7 @@ import { useToast } from "../composables/useToast";
 import { usePOSSettingsStore } from "../stores/posSettings";
 import { usePOSShiftStore } from "../stores/posShift";
 import { printEODReport } from "../utils/printEod";
+import { formatCurrencyNumber } from "../utils/currency";
 import TranslatedHTML from "./common/TranslatedHTML.vue";
 
 const props = defineProps({
@@ -1049,7 +1102,12 @@ const open = computed({
 });
 
 const { getClosingShiftData, submitClosingShift } = useShift();
-const { formatCurrency, formatQuantity, formatDateTime, formatTime } = useFormatters();
+const { formatQuantity, formatDateTime, formatTime } = useFormatters();
+
+// Thousand separators (1,250,000.00) instead of the bare toFixed(2) of useFormatters.
+function formatCurrency(amount) {
+	return formatCurrencyNumber(Number.parseFloat(amount) || 0);
+}
 const { showSuccess, showWarning } = useToast();
 const posSettingsStore = usePOSSettingsStore();
 const { hideExpectedAmount } = storeToRefs(posSettingsStore);
@@ -1139,21 +1197,18 @@ async function loadClosingData() {
 			opening_shift: props.openingShift,
 		});
 
-		// Make payment_reconciliation reactive
-		if (data.payment_reconciliation) {
-			data.payment_reconciliation = data.payment_reconciliation.map((payment) =>
-				reactive({
-					...payment,
-					closing_amount: payment.closing_amount ?? 0,
-					difference: 0,
-					_touched: true,
-				})
+		// One closing per company; make each reconciliation row reactive
+		for (const company of data.companies || []) {
+			company.payment_reconciliation = (company.payment_reconciliation || []).map(
+				(payment) =>
+					reactive({
+						...payment,
+						closing_amount: payment.closing_amount ?? 0,
+						difference: 0,
+						_touched: true,
+					})
 			);
-
-			// Calculate initial differences
-			data.payment_reconciliation.forEach((payment) => {
-				calculateDifference(payment);
-			});
+			company.payment_reconciliation.forEach(calculateDifference);
 		}
 
 		closingData.value = data;
@@ -1182,11 +1237,30 @@ function updateClosingAmount(payment, value) {
 	calculateDifference(payment);
 }
 
+const allPayments = computed(() =>
+	(closingData.value?.companies || []).flatMap((c) => c.payment_reconciliation || [])
+);
+
+const companiesWithTransactions = computed(() =>
+	(closingData.value?.companies || []).filter((c) => c.pos_transactions?.length)
+);
+
+const companiesWithTaxes = computed(() =>
+	(closingData.value?.companies || []).filter((c) => c.taxes?.length)
+);
+
+function sumPayments(company, field) {
+	return (company.payment_reconciliation || []).reduce(
+		(sum, payment) => sum + (Number.parseFloat(payment[field]) || 0),
+		0
+	);
+}
+
 const canSubmit = computed(() => {
-	if (!closingData.value || !closingData.value.payment_reconciliation) return false;
+	if (!allPayments.value.length) return false;
 
 	// Check if all closing amounts have been manually entered
-	return closingData.value.payment_reconciliation.every(
+	return allPayments.value.every(
 		(payment) =>
 			payment._touched &&
 			payment.closing_amount !== null &&
@@ -1202,23 +1276,19 @@ async function submitClosing() {
 		errorMessage.value = ""; // Clear any previous errors
 
 		// Ensure all differences are calculated
-		if (closingData.value.payment_reconciliation) {
-			closingData.value.payment_reconciliation.forEach((payment) => {
-				calculateDifference(payment);
-			});
-		}
+		allPayments.value.forEach(calculateDifference);
 
-		// Submit to server
+		// Submit to server (one POS Closing Shift per company)
 		const result = await submitResource.submit({ closing_shift: closingData.value });
-		const closingShiftName = result?.name ?? submitResource.data?.name;
-		if (closingShiftName) {
+		const closingShiftNames = result?.names ?? submitResource.data?.names ?? [];
+		if (closingShiftNames.length) {
 			try {
-				await printEODReport(closingShiftName);
+				await printEODReports(closingShiftNames);
 				eodPrintFailed.value = null;
 			} catch (err) {
 				console.warn("[eod] print failed", err);
 				showWarning(__("EOD report did not print. Use the Reprint button to retry."));
-				eodPrintFailed.value = { closingShiftName };
+				eodPrintFailed.value = { closingShiftNames };
 				showSuccessReport.value = true;
 				return;
 			}
@@ -1242,13 +1312,19 @@ async function submitClosing() {
 	}
 }
 
+async function printEODReports(names) {
+	for (const name of names) {
+		await printEODReport(name);
+	}
+}
+
 async function retryEodPrint() {
-	const closingShiftName = eodPrintFailed.value?.closingShiftName;
-	if (!closingShiftName) return;
+	const closingShiftNames = eodPrintFailed.value?.closingShiftNames;
+	if (!closingShiftNames?.length) return;
 
 	retryPrintLoading.value = true;
 	try {
-		await printEODReport(closingShiftName);
+		await printEODReports(closingShiftNames);
 		eodPrintFailed.value = null;
 		showSuccess(__("EOD report printed successfully"));
 		closeDialog();
@@ -1290,11 +1366,12 @@ const reconciliationMessage = computed(() => {
 });
 
 // Computed properties for real-time recalculation
-const invoiceCount = computed(() => {
-	if (!closingData.value) return 0;
-	const transactions = closingData.value.pos_transactions || [];
-	return transactions.length;
-});
+const invoiceCount = computed(() =>
+	(closingData.value?.companies || []).reduce(
+		(sum, c) => sum + (c.pos_transactions?.length || 0),
+		0
+	)
+);
 
 // Check if there are any return invoices
 const hasReturns = computed(() => {
@@ -1303,39 +1380,36 @@ const hasReturns = computed(() => {
 });
 
 // Count of sales invoices (non-returns)
-const salesInvoiceCount = computed(() => {
-	if (!closingData.value) return 0;
-	const transactions = closingData.value.pos_transactions || [];
-	return transactions.filter((t) => !t.is_return).length;
-});
-
-const totalTax = computed(() => {
-	if (!closingData.value || !closingData.value.taxes) return 0;
-	return closingData.value.taxes.reduce(
-		(sum, tax) => sum + Number.parseFloat(tax.amount || 0),
+const salesInvoiceCount = computed(() =>
+	(closingData.value?.companies || []).reduce(
+		(sum, c) => sum + (c.pos_transactions || []).filter((t) => !t.is_return).length,
 		0
-	);
-});
+	)
+);
+
+const totalTax = computed(() =>
+	(closingData.value?.companies || [])
+		.flatMap((c) => c.taxes || [])
+		.reduce((sum, tax) => sum + Number.parseFloat(tax.amount || 0), 0)
+);
 
 const grossSales = computed(() => {
 	if (!closingData.value) return 0;
 	return closingData.value.sales_total ?? closingData.value.grand_total ?? 0;
 });
-const getTotalExpected = computed(() => {
-	if (!closingData.value || !closingData.value.payment_reconciliation) return 0;
-	return closingData.value.payment_reconciliation.reduce(
+const getTotalExpected = computed(() =>
+	allPayments.value.reduce(
 		(sum, payment) => sum + Number.parseFloat(payment.expected_amount || 0),
 		0
-	);
-});
+	)
+);
 
-const getTotalActual = computed(() => {
-	if (!closingData.value || !closingData.value.payment_reconciliation) return 0;
-	return closingData.value.payment_reconciliation.reduce(
+const getTotalActual = computed(() =>
+	allPayments.value.reduce(
 		(sum, payment) => sum + Number.parseFloat(payment.closing_amount || 0),
 		0
-	);
-});
+	)
+);
 
 const getTotalDifference = computed(() => {
 	return getTotalActual.value - getTotalExpected.value;

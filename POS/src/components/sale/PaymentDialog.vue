@@ -843,6 +843,31 @@
 									>{{ formatCurrency(grandTotal) }}</span
 								>
 							</div>
+							<!-- Sale billed to several companies (saleSplit preview) -->
+							<div
+								v-if="splitGroups.length"
+								class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 text-start"
+							>
+								<div class="font-semibold">
+									{{ __("This sale becomes {0} invoices", [splitGroups.length]) }}
+								</div>
+								<div class="flex flex-wrap gap-x-3">
+									<span
+										v-for="group in splitGroups"
+										:key="group.company"
+										:title="group.company"
+									>
+										{{ group.abbr }} ≈ {{ formatCurrency(group.amount) }}
+									</span>
+								</div>
+								<div class="mt-0.5">
+									{{
+										__(
+											"Must be paid in full - no credit, customer credit or loyalty points."
+										)
+									}}
+								</div>
+							</div>
 						</div>
 
 						<!-- Payment Status - Two Equal Halves -->
@@ -2012,6 +2037,7 @@
 
 <script setup>
 import { usePOSSettingsStore } from "@/stores/posSettings";
+import { usePOSCartStore } from "@/stores/posCart";
 import {
 	DEFAULT_CURRENCY,
 	formatCurrency as formatCurrencyUtil,
@@ -2031,6 +2057,13 @@ import { useQuickAmounts } from "@/composables/useQuickAmounts";
 
 const log = logger.create("PaymentDialog");
 const settingsStore = usePOSSettingsStore();
+const cartStore = usePOSCartStore();
+
+// Companies the sale is billed to, when it is not just the session's own
+const splitGroups = computed(() => {
+	const { groups, company } = cartStore.saleSplit;
+	return groups.length > 1 || groups[0]?.company !== company ? groups : [];
+});
 const { showWarning, showInfo } = useToast();
 
 const props = defineProps({

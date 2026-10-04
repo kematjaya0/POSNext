@@ -33,8 +33,22 @@
 				@logout="uiStore.showLogoutDialog = true"
 			>
 				<template #menu-items>
+					<template v-if="shiftStore.isSpgMode">
+						<button
+							@click="showSpgOrdersDialog = true"
+							class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
+						>
+							<span>{{ __("Pesanan Saya") }}</span>
+						</button>
+						<button
+							@click="showSpgShiftDialog = true"
+							class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
+						>
+							<span>{{ __("Ganti Shift Kasir") }}</span>
+						</button>
+					</template>
 					<button
-						v-if="shiftStore.hasOpenShift"
+						v-if="shiftStore.hasOpenShift && !shiftStore.isSpgMode"
 						@click="uiStore.showOpenShiftDialog = true"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
 					>
@@ -334,6 +348,7 @@
 								:cart-items="cartStore.invoiceItems"
 								:currency="shiftStore.profileCurrency"
 								@item-selected="handleItemSelected"
+								@pos-order-scanned="handlePosOrderScanned"
 							/>
 						</div>
 					</keep-alive>
@@ -379,6 +394,7 @@
 							<InvoiceCart
 								:items="cartStore.invoiceItems"
 								:customer="cartStore.customer"
+								:spg-mode="shiftStore.isSpgMode"
 								:subtotal="cartStore.subtotal"
 								:tax-amount="cartStore.totalTax"
 								:discount-amount="cartStore.totalDiscount"
@@ -410,6 +426,7 @@
 								"
 								@update-uom="cartStore.changeItemUOM"
 								@edit-item="handleEditItem"
+								@edit-addons="openAddonDialog"
 								@view-shift="uiStore.showOpenShiftDialog = true"
 								@show-drafts="uiStore.showDraftDialog = true"
 								@show-history="uiStore.showHistoryDialog = true"
@@ -485,17 +502,32 @@
 					<h3 class="mt-4 text-lg font-medium text-gray-900">
 						{{ __("Welcome to POS Next") }}
 					</h3>
-					<p class="mt-2 text-sm text-gray-500">
-						{{ __("Please open a shift to start making sales") }}
-					</p>
-					<Button
-						variant="solid"
-						theme="blue"
-						@click="uiStore.showOpenShiftDialog = true"
-						class="mt-6"
-					>
-						{{ __("Open Shift") }}
-					</Button>
+					<template v-if="shiftStore.isSpgMode">
+						<p class="mt-2 text-sm text-gray-500">
+							{{ __("Pilih shift kasir yang akan menerima pembayaran pesanan") }}
+						</p>
+						<Button
+							variant="solid"
+							theme="blue"
+							@click="showSpgShiftDialog = true"
+							class="mt-6"
+						>
+							{{ __("Pilih Shift Kasir") }}
+						</Button>
+					</template>
+					<template v-else>
+						<p class="mt-2 text-sm text-gray-500">
+							{{ __("Please open a shift to start making sales") }}
+						</p>
+						<Button
+							variant="solid"
+							theme="blue"
+							@click="uiStore.showOpenShiftDialog = true"
+							class="mt-6"
+						>
+							{{ __("Open Shift") }}
+						</Button>
+					</template>
 				</div>
 			</div>
 
@@ -532,6 +564,17 @@
 				v-model="uiStore.showCustomerDialog"
 				:pos-profile="shiftStore.profileName"
 				@customer-selected="handleCustomerSelected"
+			/>
+
+			<!-- SPG: pick the cashier shift orders are paid at (nextend POS Order) -->
+			<SpgShiftDialog
+				v-model="showSpgShiftDialog"
+				:current-shift-name="shiftStore.currentShift?.name"
+				@shift-selected="handleShiftOpened"
+			/>
+			<SpgOrdersDialog
+				v-model="showSpgOrdersDialog"
+				:currency="shiftStore.profileCurrency"
 			/>
 
 			<!-- Shift Opening Dialog -->
@@ -622,6 +665,13 @@
 			/>
 
 			<!-- Generic Item Selection Dialog -->
+			<ItemAddonDialog
+				v-model="showAddonDialog"
+				:item="addonDialogItem"
+				:currency="shiftStore.profileCurrency"
+				@save="handleAddonsSaved"
+			/>
+
 			<ItemSelectionDialog
 				v-model="uiStore.showItemSelectionDialog"
 				:item="cartStore.pendingItem"
@@ -794,6 +844,7 @@
 						<div class="space-y-3 max-w-md mx-auto">
 							<!-- Recommended Action - BLUE -->
 							<button
+								v-if="!shiftStore.isSpgMode"
 								@click="logoutWithCloseShift"
 								:disabled="session.logout.loading"
 								class="w-full flex items-center justify-center px-5 py-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold rounded-lg shadow-lg hover:shadow-blue-500/30 transition-[background,box-shadow,opacity,transform] duration-200 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] active:scale-[0.98]"
@@ -930,7 +981,9 @@
 						</div>
 						<h3 class="mt-4 text-lg font-medium text-gray-900">
 							{{
-								__("Invoice {0} created successfully!", [uiStore.lastInvoiceName])
+								__("Invoice {0} created successfully!", [
+									uiStore.lastInvoiceNames.join(" + "),
+								])
 							}}
 						</h3>
 						<p class="mt-2 text-sm text-gray-500">
@@ -948,7 +1001,7 @@
 							theme="blue"
 							@click="
 								() => {
-									handlePrintInvoice({ name: uiStore.lastInvoiceName });
+									printInvoices(uiStore.lastInvoiceNames);
 									uiStore.showSuccessDialog = false;
 								}
 							"
@@ -1035,6 +1088,10 @@ let _posInitPromise = null;
 <script setup>
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
+import SpgOrdersDialog from "@/components/sale/SpgOrdersDialog.vue";
+import SpgShiftDialog from "@/components/sale/SpgShiftDialog.vue";
+import { printSpgOrderSlip } from "@/utils/printSpgOrder";
+import { orderFromQrPayload } from "@/utils/posOrderCode";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import SessionLockScreen from "@/components/common/SessionLockScreen.vue";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
@@ -1051,6 +1108,8 @@ import InvoiceCart from "@/components/sale/InvoiceCart.vue";
 import InvoiceHistoryDialog from "@/components/sale/InvoiceHistoryDialog.vue";
 import ShiftHistoryDialog from "@/components/sale/ShiftHistoryDialog.vue";
 import ItemSelectionDialog from "@/components/sale/ItemSelectionDialog.vue";
+import ItemAddonDialog from "@/components/sale/ItemAddonDialog.vue";
+import { loadCachedAddonCatalog } from "@/utils/itemAddons";
 import ItemsSelector from "@/components/sale/ItemsSelector.vue";
 import OffersDialog from "@/components/sale/OffersDialog.vue";
 import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
@@ -1071,6 +1130,8 @@ import { parseError } from "@/utils/errorHandler";
 import { cleanupUserSession } from "@/utils/sessionCleanup";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
+import { roundCurrency } from "@/utils/currency";
+import { splitSubmissionItems } from "@/utils/saleSplit";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import {
 	hydrateLocalOnlyInvoice,
@@ -1173,7 +1234,12 @@ import { usePOSSyncStore } from "@/stores/posSync";
 import { usePOSUIStore } from "@/stores/posUI";
 import { useBootstrapStore } from "@/stores/bootstrap";
 import { logger } from "@/utils/logger";
-import { shouldValidateItemStock } from "@/utils/stockValidator";
+import {
+	cartStockQty,
+	hasWarehouseChoice,
+	pickSessionWarehouse,
+	shouldValidateItemStock,
+} from "@/utils/stockValidator";
 
 // Initialize stores
 const cartStore = usePOSCartStore();
@@ -1260,6 +1326,21 @@ function computeCartHash() {
 		.join("|");
 }
 
+// Add on dialog (tinta etc. attached to a cart line - see utils/itemAddons)
+const showAddonDialog = ref(false);
+const addonDialogItem = ref(null);
+
+function openAddonDialog(item) {
+	addonDialogItem.value = item;
+	showAddonDialog.value = true;
+}
+
+function handleAddonsSaved(addons) {
+	const item = addonDialogItem.value;
+	if (!item) return;
+	cartStore.setItemAddons(item.item_code, item.uom, addons);
+}
+
 // Promotion dialog
 const showPromotionManagement = ref(false);
 
@@ -1337,7 +1418,11 @@ const profileWarehouses = computed(() => {
 	return [];
 });
 
-const canAccessShiftActions = computed(() => shiftStore.hasOpenShift);
+// SPG runs on a cashier's shift: no drafts, returns, history or closing it.
+const canAccessShiftActions = computed(() => shiftStore.hasOpenShift && !shiftStore.isSpgMode);
+const showSpgShiftDialog = ref(false);
+const showSpgOrdersDialog = ref(false);
+const savingSpgOrder = ref(false);
 
 /** Desk link only for users with the Nexus POS Manager role (from bootstrap API). */
 const canSwitchToDesk = computed(() => Boolean(bootstrapStore.data?.can_switch_to_desk));
@@ -1347,6 +1432,8 @@ let resizeState = null;
 let bodyStyleSnapshot = null;
 
 onMounted(async () => {
+	loadCachedAddonCatalog();
+
 	// Window resize listeners (passive for better performance)
 	const handleResize = () => {
 		uiStore.setWindowWidth(window.innerWidth);
@@ -1356,19 +1443,24 @@ onMounted(async () => {
 
 	// Set up real-time stock update listener
 	const cleanup = onStockUpdate(async (stockUpdates) => {
-		// Filter updates to only include items from our warehouse(s)
-		const profileWarehouses = shiftStore.profileWarehouse
-			? [shiftStore.profileWarehouse]
-			: warehousesList.value.map((w) => w.warehouse_name || w.name);
+		// Events carry one warehouse's raw qty; the grid shows the session-wide
+		// figure (Warehouse Group + other warehouses), so a sale in any session
+		// warehouse just triggers a re-fetch of the affected items.
+		const sessionWarehouses = await stockStore
+			.ensureScope(shiftStore.profileName)
+			.catch(() => new Set([shiftStore.profileWarehouse]));
 
-		const relevantUpdates = stockUpdates.filter((update) =>
-			profileWarehouses.includes(update.warehouse)
-		);
+		const itemCodes = [
+			...new Set(
+				stockUpdates
+					.filter((update) => sessionWarehouses.has(update.warehouse))
+					.map((update) => update.item_code)
+			),
+		];
 
-		if (relevantUpdates.length > 0) {
-			// Apply stock updates - Pinia auto-updates UI!
-			stockStore.update(relevantUpdates);
-			await offlineWorker.updateStockQuantities(relevantUpdates);
+		if (itemCodes.length > 0) {
+			// refresh() also writes the result to the offline cache
+			await stockStore.refresh(itemCodes, shiftStore.profileWarehouse);
 		}
 	});
 
@@ -1556,7 +1648,11 @@ onMounted(async () => {
 		const hasShift = await shiftStore.checkShift();
 
 		if (!hasShift) {
-			uiStore.showOpenShiftDialog = true;
+			if (shiftStore.isSpgMode) {
+				showSpgShiftDialog.value = true;
+			} else {
+				uiStore.showOpenShiftDialog = true;
+			}
 			return;
 		}
 
@@ -1657,8 +1753,8 @@ watch(
 		const newCustomerName = newCustomer?.name || newCustomer;
 		const oldCustomerName = oldCustomer?.name || oldCustomer;
 
-		// Only reapply if customer actually changed
-		if (newCustomerName !== oldCustomerName) {
+		// Only reapply if customer actually changed (SPG order prices are locked)
+		if (newCustomerName !== oldCustomerName && !cartStore.posOrder) {
 			// Clear existing timer
 			if (offerReapplyTimer.value) {
 				clearTimeout(offerReapplyTimer.value);
@@ -1785,6 +1881,7 @@ async function setupPeriodicStockSync(warehouse) {
 		// Configure stock sync with warehouse and items
 		const config = await offlineWorker.configureStockSync({
 			warehouse,
+			posProfile: shiftStore.profileName,
 			itemCodes,
 			intervalMs: syncIntervalMs,
 		});
@@ -1954,7 +2051,61 @@ async function handleShiftClosed() {
 	}
 }
 
+/**
+ * Add to cart and point the row at one session warehouse. The cart keeps one
+ * row per item + UOM. A warehouse the cashier picked by hand (`manual`) pins
+ * the whole row; otherwise the row is spread over the branch warehouses on
+ * submit (saleSplit.js preview, split_invoice.py decides) and `warehouse` is
+ * just the tier rule's pick for the row's new total.
+ */
+function addItemToSessionWarehouse(item, qty, autoAdd, warehouse = null, manual = false) {
+	const factor = Number(item.conversion_factor) || 1;
+	const uom = item.uom || item.stock_uom;
+	const existing = cartStore.invoiceItems.find(
+		(i) => i.item_code === item.item_code && i.uom === uom
+	);
+	const keepPinned = !manual && existing?.warehouse_manual;
+	const target =
+		(keepPinned && existing.warehouse) ||
+		warehouse ||
+		pickSessionWarehouse(
+			Object.entries(item.stock_by_warehouse || {}).map(([name, stockQty]) => ({
+				warehouse: name,
+				stock_qty: stockQty,
+			})),
+			cartStockQty(cartStore.invoiceItems, item.item_code) + qty * factor
+		) ||
+		item.warehouse;
+
+	// A hand-picked warehouse outside the branch is only offered when the branch
+	// falls short, so validate against branch + outside stock (the dialog
+	// already warned against that warehouse's own stock)
+	const isOutside = target && !(target in (item.stock_by_warehouse || {}));
+	const stockItem = isOutside
+		? { ...item, actual_qty: (item.actual_qty || 0) + (item.outside_qty || 0) }
+		: item;
+
+	cartStore.addItem(
+		{ ...stockItem, warehouse: target },
+		qty,
+		autoAdd,
+		shiftStore.currentProfile
+	);
+
+	const row = cartStore.invoiceItems.find(
+		(i) => i.item_code === item.item_code && i.uom === uom
+	);
+	if (row && target) row.warehouse = target;
+	if (row && manual) row.warehouse_manual = true;
+}
+
 function handleItemSelected(item, autoAdd = false) {
+	if (cartStore.posOrder) {
+		showWarning(
+			__("Keranjang berisi pesanan SPG {0} - item tidak bisa ditambah", [cartStore.posOrder])
+		);
+		return;
+	}
 	// Auto-add mode
 	if (autoAdd) {
 		try {
@@ -1971,14 +2122,9 @@ function handleItemSelected(item, autoAdd = false) {
 					price_list_rate: unitRate,
 					is_resolved_barcode: true, // Mark as readonly
 				};
-				cartStore.addItem(
-					resolvedItem,
-					item.resolved_qty,
-					true,
-					shiftStore.currentProfile
-				);
+				addItemToSessionWarehouse(resolvedItem, item.resolved_qty, true);
 			} else {
-				cartStore.addItem(item, 1, true, shiftStore.currentProfile);
+				addItemToSessionWarehouse(item, 1, true);
 			}
 		} catch (error) {
 			uiStore.showError(
@@ -1997,7 +2143,8 @@ function handleItemSelected(item, autoAdd = false) {
 		settingsStore.shouldEnforceStockValidation() &&
 		shouldValidateItemStock(item)
 	) {
-		const actualQty = item.actual_qty ?? item.stock_qty ?? 0;
+		// Stock only in other warehouses still opens the dialog to pick one
+		const actualQty = (item.actual_qty ?? item.stock_qty ?? 0) + (item.outside_qty || 0);
 		if (actualQty <= 0) {
 			uiStore.showError(
 				__("Insufficient Stock"),
@@ -2018,8 +2165,8 @@ function handleItemSelected(item, autoAdd = false) {
 		return;
 	}
 
-	// Check for UOMs
-	if (item.item_uoms && item.item_uoms.length > 0) {
+	// Check for UOMs - or several session warehouses to pick from (same dialog)
+	if ((item.item_uoms && item.item_uoms.length > 0) || hasWarehouseChoice(item)) {
 		cartStore.setPendingItem(item, 1, "uom");
 		uiStore.showItemSelectionDialog = true;
 		return;
@@ -2089,6 +2236,11 @@ async function handleProceedToPayment() {
 		return;
 	}
 
+	if (shiftStore.isSpgMode) {
+		await handleSaveSpgOrder();
+		return;
+	}
+
 	const customerValue = cartStore.customer?.name || cartStore.customer;
 	if (!customerValue && !shiftStore.profileCustomer) {
 		showWarning(__("Please select a customer before proceeding"));
@@ -2113,6 +2265,125 @@ async function handleProceedToPayment() {
 	}
 
 	uiStore.showPaymentDialog = true;
+}
+
+/**
+ * Cashier: an SPG order slip was scanned (QR) or its number typed. Online the
+ * order is fetched to make sure it is still Pending; offline the QR itself
+ * carries the order. Its rows land in the cart read-only (see loadPosOrder).
+ */
+async function handlePosOrderScanned(code) {
+	if (shiftStore.isSpgMode) {
+		showWarning(__("Pesanan SPG dibayar di kasir"));
+		return;
+	}
+	if (cartStore.posOrder === code.name) return;
+	if (!cartStore.isEmpty) {
+		showWarning(
+			__("Selesaikan atau kosongkan keranjang sebelum memuat pesanan {0}", [code.name])
+		);
+		return;
+	}
+
+	let order = null;
+	if (!offlineStore.isOffline) {
+		try {
+			order = await call("nextend.pos_order.get_order", { name: code.name });
+		} catch (error) {
+			if (!code.payload) {
+				showError(error?.messages?.[0] || error?.message || __("Pesanan tidak ditemukan"));
+				return;
+			}
+		}
+		if (order && order.status !== "Pending") {
+			showError(__("Pesanan {0} sudah {1}", [order.name, __(order.status)]));
+			return;
+		}
+	}
+	if (!order) {
+		if (!code.payload) {
+			showWarning(__("Sedang offline - scan QR pesanan (bukan nomornya)"));
+			return;
+		}
+		order = orderFromQrPayload(code.payload);
+		await fillOrderItemNamesFromCache(order);
+	}
+
+	cartStore.loadPosOrder(order);
+	if (order.customer) {
+		cartStore.setCustomer({ name: order.customer, customer_name: order.customer });
+	}
+	previousCartHash = computeCartHash();
+	showSuccess(__("Pesanan {0} dimuat", [order.name]));
+}
+
+async function fillOrderItemNamesFromCache(order) {
+	for (const row of order.items) {
+		const code = row.addon_item || row.item_code;
+		try {
+			const cached = await offlineWorker.searchCachedItems(code, 5);
+			const match = cached?.find((i) => i.item_code === code);
+			if (match) {
+				row.item_name = match.item_name;
+				row.stock_uom = match.stock_uom;
+			}
+		} catch {
+			// Name is cosmetic - the item code is shown instead
+		}
+	}
+}
+
+/**
+ * SPG: save the cart as a nextend POS Order (locks its stock), print the slip
+ * with QR for the customer to bring to the cashier, then start a new cart.
+ * Prices are sent as computed here - they stay locked on the order.
+ */
+async function handleSaveSpgOrder() {
+	if (savingSpgOrder.value) return;
+	if (offlineStore.isOffline) {
+		showWarning(__("Pesanan hanya bisa disimpan saat online"));
+		return;
+	}
+
+	cartStore.dropOutOfStockFreeItems();
+	if (cartStore.isEmpty) return;
+
+	const customer = cartStore.customer?.name || cartStore.customer;
+	const items = cartStore.formatItemsForSubmission(cartStore.invoiceItems).map((row) => ({
+		...row,
+		addon_item: row.custom_addon_item,
+		addon_key: row.custom_addon_key,
+		addon_parent_key: row.custom_addon_parent_key,
+	}));
+
+	savingSpgOrder.value = true;
+	try {
+		const order = await call("nextend.pos_order.create_order", {
+			order: JSON.stringify({
+				pos_opening_shift: shiftStore.currentShift?.name,
+				customer: customer && customer !== shiftStore.profileCustomer ? customer : null,
+				discount_amount: cartStore.additionalDiscount || 0,
+				coupon_code:
+					cartStore.appliedCoupon?.code || cartStore.appliedCoupon?.name || null,
+				items,
+			}),
+		});
+
+		cartStore.clearCart();
+		previousCartHash = "";
+		await cartStore.setDefaultCustomer();
+		showSuccess(__("Pesanan {0} tersimpan", [order.name]));
+
+		try {
+			printSpgOrderSlip(order);
+		} catch (error) {
+			showError(error.message);
+		}
+	} catch (error) {
+		showError(error?.messages?.[0] || error?.message || __("Gagal menyimpan pesanan"));
+	} finally {
+		savingSpgOrder.value = false;
+	}
 }
 
 async function handleDeleteFailedInvoice() {
@@ -2207,6 +2478,10 @@ async function handlePaymentCompleted(paymentData) {
 				receivable_account: paymentData.receivable_account || null,
 				edited_from: editingOfflineContext?.originalOfflineId || null,
 			};
+			if (cartStore.posOrder) {
+				invoiceData.custom_pos_order = cartStore.posOrder;
+				invoiceData.discount_amount = cartStore.additionalDiscount || 0;
+			}
 
 			// Save to the offline queue first so we can use the worker's
 			// canonical pos_offline_<uuid> id as the cache key — keeping
@@ -2258,8 +2533,12 @@ async function handlePaymentCompleted(paymentData) {
 				status: Math.max(0, grandTotal - paidAmount) < 0.01 ? "Paid" : "Unpaid",
 				docstatus: 0,
 			};
-			uiStore.setLastOfflinePrintDoc(offlinePrintDoc);
-			cacheOfflineReceiptPayload(offlineReceiptName, offlinePrintDoc);
+			// A sale billed to several companies prints one temporary receipt per
+			// company, split as previewed; the server re-checks it on sync.
+			const receiptDocs = splitOfflineReceipt(offlinePrintDoc, preparedItems);
+			receiptDocs.forEach((doc) => cacheOfflineReceiptPayload(doc.name, doc));
+			const receiptNames = receiptDocs.map((doc) => doc.name);
+			uiStore.setLastOfflinePrintDoc(receiptDocs[0]);
 			uiStore.showPaymentDialog = false;
 			cartStore.clearCart();
 			// Reset cart hash after successful payment
@@ -2272,16 +2551,16 @@ async function handlePaymentCompleted(paymentData) {
 
 			if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 				try {
-					await handlePrintInvoice({ name: offlineReceiptName });
+					for (const name of receiptNames) await handlePrintInvoice({ name });
 					showSuccess(
 						__(
 							"Invoice {0} saved offline and sent to printer — will sync when online",
-							[offlineReceiptName]
+							[receiptNames.join(" + ")]
 						)
 					);
 				} catch (error) {
 					log.error("Offline auto-print error:", error);
-					uiStore.showSuccess(offlineReceiptName, grandTotal, paymentData.paid_amount);
+					uiStore.showSuccess(receiptNames, grandTotal, paymentData.paid_amount);
 					showWarning(
 						__(
 							"Invoice {0} saved offline but print failed — open Print from the success dialog",
@@ -2290,7 +2569,7 @@ async function handlePaymentCompleted(paymentData) {
 					);
 				}
 			} else {
-				uiStore.showSuccess(offlineReceiptName, grandTotal, paymentData.paid_amount);
+				uiStore.showSuccess(receiptNames, grandTotal, paymentData.paid_amount);
 				showSuccess(__("Invoice saved offline. Will sync when online"));
 			}
 		} else {
@@ -2342,7 +2621,15 @@ async function handlePaymentCompleted(paymentData) {
 				}
 
 				const invoiceName = result.name || result.message?.name || __("Unknown");
-				const invoiceTotal = result.grand_total || result.total || 0;
+				// A split sale returns every invoice it created (split_invoice.py)
+				const invoices = result.invoices?.length
+					? result.invoices
+					: [{ ...result, name: invoiceName }];
+				const invoiceNames = invoices.map((invoice) => invoice.name);
+				const invoiceTotal = invoices.reduce(
+					(sum, invoice) => sum + (invoice.grand_total || invoice.total || 0),
+					0
+				);
 				const paidAmount = paymentData.paid_amount || invoiceTotal;
 
 				uiStore.showPaymentDialog = false;
@@ -2365,15 +2652,19 @@ async function handlePaymentCompleted(paymentData) {
 
 				if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 					try {
-						await handlePrintInvoice({ name: invoiceName });
-						showSuccess(__("Invoice {0} created and sent to printer", [invoiceName]));
+						for (const name of invoiceNames) await handlePrintInvoice({ name });
+						showSuccess(
+							__("Invoice {0} created and sent to printer", [invoiceNames.join(" + ")])
+						);
 					} catch (error) {
 						log.error("Auto-print error:", error);
-						showWarning(__("Invoice {0} created but print failed", [invoiceName]));
+						showWarning(
+							__("Invoice {0} created but print failed", [invoiceNames.join(" + ")])
+						);
 					}
 				} else {
-					uiStore.showSuccess(invoiceName, invoiceTotal, paidAmount);
-					showSuccess(__("Invoice {0} created successfully", [invoiceName]));
+					uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount);
+					showSuccess(__("Invoice {0} created successfully", [invoiceNames.join(" + ")]));
 				}
 			}
 		}
@@ -2489,7 +2780,13 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+					addItemToSessionWarehouse(
+						itemToAdd,
+						qty,
+						false,
+						option.warehouse,
+						Boolean(option.warehouse_manual)
+					);
 					uiStore.showItemSelectionDialog = false;
 					cartStore.clearPendingItem();
 					showSuccess(__("{0} ({1}) added to cart", [itemToAdd.item_name, option.uom]));
@@ -2809,7 +3106,19 @@ async function handleEditOfflineInvoice(invoice) {
 		}
 
 		if (invoiceData.items && invoiceData.items.length > 0) {
+			// Add on rows go back onto their base line instead of becoming cart lines.
+			const addonsByKey = {};
+			for (const row of invoiceData.items) {
+				if (!row.custom_addon_parent_key) continue;
+				(addonsByKey[row.custom_addon_parent_key] ||= []).push({
+					item_code: row.custom_addon_item,
+					item_name: row.item_name,
+					amount: row.rate,
+				});
+			}
+
 			for (const item of invoiceData.items) {
+				if (item.custom_addon_parent_key) continue;
 				// Use autoAdd=true to skip stock validation when loading saved invoices
 				// Check both quantity and qty fields since items are stored with 'quantity'
 				cartStore.addItem(
@@ -2818,6 +3127,10 @@ async function handleEditOfflineInvoice(invoice) {
 					true,
 					shiftStore.currentProfile
 				);
+				const addons = addonsByKey[item.custom_addon_key];
+				if (addons) {
+					cartStore.setItemAddons(item.item_code, item.uom || item.stock_uom, addons);
+				}
 			}
 		}
 
@@ -3087,6 +3400,50 @@ async function loadInvoiceHistoryData() {
 function handleViewInvoice(invoice) {
 	selectedInvoiceForView.value = invoice.name || invoice;
 	showInvoiceDetail.value = true;
+}
+
+async function printInvoices(names) {
+	for (const name of names) await handlePrintInvoice({ name });
+}
+
+/**
+ * Temporary offline receipts: one per company the sale bills (saleSplit
+ * preview), named `<offline id>-<abbr>`. Totals are shared out by each
+ * company's net; the session company's receipt carries the change.
+ */
+function splitOfflineReceipt(doc, preparedItems) {
+	const split = cartStore.saleSplit;
+	const isSplit =
+		split.groups.length > 1 || (split.groups[0] && split.groups[0].company !== split.company);
+	if (!isSplit) return [doc];
+
+	const groups = splitSubmissionItems(preparedItems, split);
+	const nets = groups.map((group) =>
+		group.items.reduce((sum, row) => sum + (Number(row.qty) || 0) * (Number(row.rate) || 0), 0)
+	);
+	const totalNet = nets.reduce((sum, net) => sum + net, 0) || 1;
+	const totals = nets.map((net) => roundCurrency((doc.grand_total * net) / totalNet));
+	const othersTotal = totals.slice(1).reduce((sum, total) => sum + total, 0);
+	totals[0] = roundCurrency(doc.grand_total - othersTotal);
+
+	return groups.map((group, index) => {
+		const paid = index ? totals[index] : roundCurrency(doc.paid_amount - othersTotal);
+		return {
+			...doc,
+			name: `${doc.name}-${group.abbr}`,
+			company: group.company,
+			items: group.items.map((item) => ({ ...item, quantity: item.qty })),
+			grand_total: totals[index],
+			total_taxes_and_charges: roundCurrency(
+				((doc.total_taxes_and_charges || 0) * nets[index]) / totalNet
+			),
+			payments: [],
+			paid_amount: paid,
+			change_amount: index ? 0 : doc.change_amount,
+			outstanding_amount: Math.max(0, totals[index] - paid),
+			status: Math.max(0, totals[index] - paid) < 0.01 ? "Paid" : "Unpaid",
+		};
+	});
 }
 
 // Centralized print handler - uses printInvoice.js utilities

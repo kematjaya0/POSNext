@@ -548,12 +548,18 @@ class OfflineWorkerClient {
 	 * Configure periodic stock sync
 	 * @param {Object} config - Configuration object
 	 * @param {string} config.warehouse - Warehouse to track
+	 * @param {string} config.posProfile - POS Profile scoping stock to the session's warehouses
 	 * @param {Array<string>} config.itemCodes - Item codes to sync
 	 * @param {number} config.intervalMs - Sync interval in milliseconds (min 10000)
 	 * @returns {Promise<Object>} Current configuration
 	 */
-	async configureStockSync({ warehouse, itemCodes, intervalMs }) {
-		return this.sendMessage("CONFIGURE_STOCK_SYNC", { warehouse, itemCodes, intervalMs });
+	async configureStockSync({ warehouse, posProfile, itemCodes, intervalMs }) {
+		return this.sendMessage("CONFIGURE_STOCK_SYNC", {
+			warehouse,
+			posProfile,
+			itemCodes,
+			intervalMs,
+		});
 	}
 
 	/**

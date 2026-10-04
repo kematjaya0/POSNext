@@ -180,8 +180,9 @@ def submit_closing_shift(closing_shift):
 		if isinstance(closing_shift, dict):
 			closing_shift = json.dumps(closing_shift)
 
-		result = submit_shift(closing_shift)
-		return {"name": result, "status": "success"}
+		names = submit_shift(closing_shift)
+		# "name" stays the opening company's closing (submitted last) for older callers.
+		return {"name": names[-1], "names": names, "status": "success"}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Submit Closing Shift Error")
 		frappe.throw(_("Error submitting closing shift: {0}").format(str(e)))

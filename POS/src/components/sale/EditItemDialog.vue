@@ -259,7 +259,9 @@
 												:item-code="localItem?.item_code"
 												:uom="localUom"
 												:pos-profile="editItemPosProfile"
+												:qty="neededQty"
 												@update:model-value="handleWarehouseChange"
+												@picked-by-hand="warehousePickedByHand = $event"
 											/>
 
 											<!-- Serial Numbers Section (only for serial items) -->
@@ -501,7 +503,8 @@ import { usePOSSettingsStore } from "@/stores/posSettings";
 import { usePOSOffersStore } from "@/stores/posOffers";
 import { usePOSShiftStore } from "@/stores/posShift";
 import { useSerialNumberStore } from "@/stores/serialNumber";
-import { getItemStock } from "@/utils/stockValidator";
+import { cartStockQty, getItemStock } from "@/utils/stockValidator";
+import { usePOSCartStore } from "@/stores/posCart";
 import {
 	formatCurrency as formatCurrencyUtil,
 	getCurrencySymbol,
@@ -518,6 +521,7 @@ const settingsStore = usePOSSettingsStore();
 const offersStore = usePOSOffersStore();
 const shiftStore = usePOSShiftStore();
 const serialStore = useSerialNumberStore();
+const cartStore = usePOSCartStore();
 
 /**
  * True if this item currently qualifies for an active offer based on qty
@@ -581,6 +585,8 @@ const localQuantity = ref(1);
 const localUom = ref("");
 const localRate = ref(0);
 const localWarehouse = ref("");
+// The cashier chose the warehouse here: the row stops being auto-allocated
+const warehousePickedByHand = ref(false);
 const discountType = ref("percentage");
 const discountValue = ref(0);
 const calculatedSubtotal = ref(0);
@@ -708,6 +714,19 @@ const uomOptions = computed(() => {
 const editItemPosProfile = computed(
 	() => settingsStore.settings?.pos_profile || localItem.value?.pos_profile
 );
+
+// What the branch must cover in the edited UOM: this row's qty plus the
+// item's other cart rows (props.item is a copy of the row, so its own
+// original qty is taken back out) - gates WarehouseStockList's outside tier
+const neededQty = computed(() => {
+	const otherRows =
+		cartStockQty(cartStore.invoiceItems, localItem.value?.item_code) -
+		(Number(props.item?.quantity) || 0) * (Number(props.item?.conversion_factor) || 1);
+	return (
+		(Number(localQuantity.value) || 0) +
+		Math.max(otherRows, 0) / getConversionFactorForUom(localUom.value)
+	);
+});
 
 const discountTypeOptions = computed(() => [
 	{ value: "percentage", label: __("Percentage (%)") },
@@ -1096,6 +1115,7 @@ function updateItem() {
 		// Preserve price_list_rate for reference (original price before any manual edits)
 		price_list_rate: originalPriceListRate.value,
 		warehouse: localWarehouse.value,
+		warehouse_manual: Boolean(localItem.value.warehouse_manual || warehousePickedByHand.value),
 		discount_percentage: discountPercentage,
 		discount_amount: discountAmount,
 		discount_source:

@@ -2158,8 +2158,28 @@ def submit_invoice(invoice=None, data=None):
 	try:
 		invoice_name = invoice.get("name")
 
+		# A basket not yet saved as a draft may ship from several warehouses or
+		# companies of the branch - allocate it and bill each company apart.
+		is_new = not invoice_name or not frappe.db.exists(doctype, invoice_name)
+		if is_new and doctype == "Sales Invoice" and pos_profile and not cint(invoice.get("is_return")):
+			from pos_next.api.split_invoice import plan_sale, submit_split_sale
+
+			plan = plan_sale(invoice)
+			if plan["split"]:
+				result = submit_split_sale(invoice, data, plan)
+				if result.get("requires_approval"):
+					return result
+				invoice_submitted = True
+				if sync_record_name:
+					_complete_offline_sync(sync_record_name, result["name"])
+				if offline_id:
+					result["offline_id"] = offline_id
+				return result
+			if plan["groups"]:
+				invoice["items"] = plan["groups"][0]["items"]
+
 		# Get or create invoice
-		if not invoice_name or not frappe.db.exists(doctype, invoice_name):
+		if is_new:
 			created = update_invoice(json.dumps(invoice))
 			if not created or not isinstance(created, dict):
 				frappe.throw(_("Failed to create invoice draft"))

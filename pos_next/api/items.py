@@ -105,6 +105,27 @@ def _fetch_item_uom_prices(item_code, price_list, transaction_date=None):
 	return uom_prices
 
 
+def get_stock_locks(item_codes, warehouses):
+	"""Stock held back from sale by other apps, as ``{(item_code, warehouse): qty}``.
+
+	Apps register ``pos_next_stock_locks`` hooks - callables taking
+	``(warehouses, item_codes)`` and returning that map (e.g. nextend's pending
+	SPG orders). Subtracted from ``actual_qty`` wherever POS shows or
+	validates stock, so a terminal can't sell what is already promised.
+	"""
+	locks = defaultdict(float)
+	if not item_codes or not warehouses:
+		return locks
+	for method in frappe.get_hooks("pos_next_stock_locks"):
+		for key, qty in (frappe.get_attr(method)(list(warehouses), list(item_codes)) or {}).items():
+			locks[tuple(key)] += flt(qty)
+	return locks
+
+
+def _locked_qty(locks, item_code, warehouses):
+	return sum(locks.get((item_code, warehouse), 0.0) for warehouse in warehouses)
+
+
 def get_stock_availability(item_code, warehouse):
 	"""Return total available quantity for an item in the given warehouse."""
 	if not warehouse:
@@ -124,7 +145,128 @@ def get_stock_availability(item_code, warehouse):
 		.run(as_dict=True)
 	)
 
-	return flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
+	actual_qty = flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
+	return actual_qty - _locked_qty(get_stock_locks([item_code], warehouses), item_code, warehouses)
+
+
+def get_session_scope(pos_profile_doc):
+	"""Warehouse tiers a POS session sells from: ``{native, branch, outside}``.
+
+	Defined by nextend's Warehouse Group (``get_session_warehouses``). Without
+	nextend the session is just POS Profile.warehouse (children included when
+	it is a group warehouse), like stock POS.
+	"""
+	native = pos_profile_doc.warehouse
+	try:
+		from nextend.warehouse_group import get_session_warehouses
+
+		scope = get_session_warehouses(pos_profile_doc.name)
+	except ImportError:
+		scope = {"native": native, "branch": [native] if native else [], "outside": []}
+
+	if native and scope["branch"] == [native] and frappe.db.get_value("Warehouse", native, "is_group"):
+		scope["branch"] = frappe.db.get_descendants("Warehouse", native) or [native]
+	return scope
+
+
+@frappe.whitelist()
+def get_session_warehouses(pos_profile):
+	"""``get_session_scope`` for the frontend (filters realtime stock events).
+
+	Adds ``company_by_warehouse`` (``{warehouse: {company, abbr}}`` for the
+	branch) so the cart can preview how a sale splits per company.
+	"""
+	profile = frappe.get_cached_doc("POS Profile", pos_profile)
+	scope = get_session_scope(profile)
+	rows = frappe.get_all(
+		"Warehouse", filters={"name": ["in", scope["branch"]]}, fields=["name", "company"]
+	)
+	abbr = dict(
+		frappe.get_all(
+			"Company",
+			filters={"name": ["in", list({row.company for row in rows})]},
+			fields=["name", "abbr"],
+			as_list=True,
+		)
+	)
+	scope["company"] = profile.company
+	scope["company_by_warehouse"] = {
+		row.name: {"company": row.company, "abbr": abbr.get(row.company)} for row in rows
+	}
+	return scope
+
+
+def get_session_stock(item_codes, pos_profile_doc):
+	"""Stock (stock UOM, locks deducted) of `item_codes` across a POS session.
+
+	Returns ``{item_code: {actual_qty, stock_by_warehouse, stock_by_company,
+	outside_qty}}``: ``actual_qty`` is the branch total the cashier sells from,
+	split per branch warehouse (in tier order) and per company abbr (native
+	company first);
+	``outside_qty`` is what the branch companies hold in their other
+	warehouses, which the cashier may only pick by hand.
+	"""
+	scope = get_session_scope(pos_profile_doc)
+	warehouses = scope["branch"] + scope["outside"]
+	if not item_codes or not warehouses:
+		return {}
+
+	company_by_warehouse = dict(
+		frappe.get_all(
+			"Warehouse", filters={"name": ["in", scope["branch"]]}, fields=["name", "company"], as_list=True
+		)
+	)
+	abbr_by_company = dict(
+		frappe.get_all(
+			"Company",
+			filters={"name": ["in", list(set(company_by_warehouse.values()))]},
+			fields=["name", "abbr"],
+			as_list=True,
+		)
+	)
+	abbr_by_warehouse = {wh: abbr_by_company.get(company) for wh, company in company_by_warehouse.items()}
+	company_order = list(dict.fromkeys(abbr_by_warehouse.get(wh) for wh in scope["branch"]))
+
+	Bin = DocType("Bin")
+	rows = (
+		frappe.qb.from_(Bin)
+		.select(Bin.item_code, Bin.warehouse, Bin.actual_qty)
+		.where(Bin.item_code.isin(list(item_codes)))
+		.where(Bin.warehouse.isin(warehouses))
+		.run(as_dict=True)
+	)
+	locks = get_stock_locks(item_codes, warehouses)
+	branch = set(scope["branch"])
+
+	stock = {}
+	for row in rows:
+		qty = flt(row.actual_qty) - locks.get((row.item_code, row.warehouse), 0.0)
+		entry = stock.setdefault(
+			row.item_code,
+			{
+				"actual_qty": 0.0,
+				# Tier order (native first) - the POS picks its default warehouse from it
+				"stock_by_warehouse": dict.fromkeys(scope["branch"], 0.0),
+				"stock_by_company": dict.fromkeys(company_order, 0.0),
+				"outside_qty": 0.0,
+			},
+		)
+		if row.warehouse in branch:
+			entry["actual_qty"] += qty
+			entry["stock_by_warehouse"][row.warehouse] = qty
+			entry["stock_by_company"][abbr_by_warehouse.get(row.warehouse)] += qty
+		elif qty > 0:
+			entry["outside_qty"] += qty
+	return stock
+
+
+def _apply_session_stock(item, session_stock):
+	"""Set an item payload's stock fields from a `get_session_stock` result."""
+	entry = session_stock.get(item["item_code"]) or {}
+	item["actual_qty"] = entry.get("actual_qty", 0.0)
+	item["stock_by_warehouse"] = entry.get("stock_by_warehouse", {})
+	item["stock_by_company"] = entry.get("stock_by_company", {})
+	item["outside_qty"] = entry.get("outside_qty", 0.0)
 
 
 def _get_uom_conversion_factor(item_code, uom):
@@ -144,55 +286,43 @@ def _get_uom_conversion_factor(item_code, uom):
 
 @frappe.whitelist()
 def get_item_warehouse_stock(item_code, uom=None, pos_profile=None):
-	"""Warehouse candidates + stock (converted to `uom`) for one item, for the
-	add/edit item dialogs.
+	"""Warehouses of the POS session + stock (converted to `uom`) for one item,
+	for the add/edit item dialogs.
 
-	Ordered: warehouses the cashier owns (via their nextend Warehouse Group)
-	in the POS Profile's own company first, then owned warehouses in other
-	companies, then the rest of the profile's company. POS Settings' own
-	warehouse picker is untouched by this - it always stays locked to
-	POS Profile.warehouse.
+	Ordered by tier (see ``get_session_scope``): the native warehouse, the
+	rest of the branch (Warehouse Group, any company), then the branch
+	companies' warehouses outside it - which the dialog only lets the cashier
+	pick when the branch's own stock falls short. POS Settings' own warehouse
+	picker is untouched by this - it always stays locked to POS Profile.warehouse.
 	"""
 	if not item_code or not pos_profile:
 		return []
 
-	profile = frappe.db.get_value("POS Profile", pos_profile, ["company", "warehouse"], as_dict=True)
-	if not profile or not profile.company:
+	profile = frappe.get_cached_doc("POS Profile", pos_profile)
+	if not profile.company or not profile.warehouse:
 		return []
 
-	try:
-		from nextend.warehouse_group import get_user_warehouses
-
-		own_warehouses = set(get_user_warehouses(frappe.session.user))
-	except Exception:
-		own_warehouses = set()
+	scope = get_session_scope(profile)
+	tier_by_warehouse = {wh: "outside" for wh in scope["outside"]}
+	tier_by_warehouse.update({wh: "branch" for wh in scope["branch"]})
+	tier_by_warehouse[scope["native"]] = "native"
 
 	candidates = frappe.get_all(
 		"Warehouse",
-		filters={"company": profile.company, "disabled": 0, "is_group": 0},
+		filters={"name": ["in", list(tier_by_warehouse)], "is_group": 0},
 		fields=["name", "warehouse_name", "company"],
 	)
-	same_company_names = {w.name for w in candidates}
-
-	other_own = own_warehouses - same_company_names
-	if other_own:
-		candidates += frappe.get_all(
-			"Warehouse",
-			filters={"name": ["in", list(other_own)], "disabled": 0, "is_group": 0},
-			fields=["name", "warehouse_name", "company"],
-		)
-
 	if not candidates:
 		return []
 
-	company_abbr = {
-		c.name: c.abbr
-		for c in frappe.get_all(
+	company_abbr = dict(
+		frappe.get_all(
 			"Company",
 			filters={"name": ["in", list({w.company for w in candidates})]},
 			fields=["name", "abbr"],
+			as_list=True,
 		)
-	}
+	)
 
 	conversion_factor = _get_uom_conversion_factor(item_code, uom)
 
@@ -204,35 +334,25 @@ def get_item_warehouse_stock(item_code, uom=None, pos_profile=None):
 		.where(Bin.warehouse.isin([w.name for w in candidates]))
 		.run(as_dict=True)
 	)
-	stock_by_warehouse = {row.warehouse: flt(row.actual_qty) for row in stock_rows}
+	locks = get_stock_locks([item_code], [w.name for w in candidates])
+	stock_by_warehouse = {
+		row.warehouse: flt(row.actual_qty) - locks.get((item_code, row.warehouse), 0.0) for row in stock_rows
+	}
 
-	result = []
-	for warehouse in candidates:
-		is_own = warehouse.name in own_warehouses
-		is_native_company = warehouse.company == profile.company
-		actual_qty = stock_by_warehouse.get(warehouse.name, 0.0)
-		result.append(
-			{
-				"warehouse": warehouse.name,
-				"warehouse_name": warehouse.warehouse_name or warehouse.name,
-				"company": warehouse.company,
-				"company_abbr": company_abbr.get(warehouse.company),
-				"is_own": is_own,
-				"is_native_company": is_native_company,
-				"stock_qty": flt(actual_qty / conversion_factor),
-			}
-		)
-
-	def sort_key(row):
-		if row["is_own"] and row["is_native_company"]:
-			tier = 0
-		elif row["is_own"]:
-			tier = 1
-		else:
-			tier = 2
-		return (tier, row["warehouse_name"])
-
-	result.sort(key=sort_key)
+	tier_order = {"native": 0, "branch": 1, "outside": 2}
+	result = [
+		{
+			"warehouse": warehouse.name,
+			"warehouse_name": warehouse.warehouse_name or warehouse.name,
+			"company": warehouse.company,
+			"company_abbr": company_abbr.get(warehouse.company),
+			"tier": tier_by_warehouse[warehouse.name],
+			"is_native_company": warehouse.company == profile.company,
+			"stock_qty": flt(stock_by_warehouse.get(warehouse.name, 0.0) / conversion_factor),
+		}
+		for warehouse in candidates
+	]
+	result.sort(key=lambda row: (tier_order[row["tier"]], row["warehouse_name"]))
 	return result
 
 
@@ -568,6 +688,8 @@ def search_by_barcode(barcode, pos_profile):
 
 		# Ensure warehouse is set on the response (needed for cart/invoice)
 		item_details["warehouse"] = pos_profile_doc.warehouse
+		if item_doc.is_stock_item:
+			_apply_session_stock(item_details, get_session_stock([item_code], pos_profile_doc))
 
 		# Build uom_prices map (same pattern as get_items)
 		uom_prices = _fetch_item_uom_prices(
@@ -609,7 +731,9 @@ def get_item_stock(item_code, warehouse):
 			or {}
 		)
 
-		stock_qty = flt(bin_data.get("actual_qty", 0))
+		stock_qty = flt(bin_data.get("actual_qty", 0)) - _locked_qty(
+			get_stock_locks([item_code], [warehouse]), item_code, [warehouse]
+		)
 		reserved_qty = flt(bin_data.get("reserved_qty", 0))
 
 		return {
@@ -755,17 +879,9 @@ def get_item_variants(template_item, pos_profile):
 				attributes_map[attr["parent"]][attr["attribute"]] = attr["attribute_value"]
 
 		# Batch query stock for all variants at once using Query Builder
-		stock_map = {}
+		session_stock = {}
 		if variant_codes and pos_profile_doc.warehouse:
-			Bin = DocType("Bin")
-			stocks = (
-				frappe.qb.from_(Bin)
-				.select(Bin.item_code, Bin.actual_qty)
-				.where(Bin.item_code.isin(variant_codes))
-				.where(Bin.warehouse == pos_profile_doc.warehouse)
-				.run(as_dict=True)
-			)
-			stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
+			session_stock = get_session_stock(variant_codes, pos_profile_doc)
 
 		# Enrich each variant with attributes, price, stock, and UOMs
 		for variant in variants:
@@ -781,7 +897,7 @@ def get_item_variants(template_item, pos_profile):
 			variant["rate"] = price or 0
 
 			# Get stock from pre-loaded stock map (performance optimization)
-			variant["actual_qty"] = stock_map.get(variant["item_code"], 0)
+			_apply_session_stock(variant, session_stock)
 
 			# Add warehouse
 			variant["warehouse"] = pos_profile_doc.warehouse
@@ -926,9 +1042,9 @@ def _build_item_base_conditions(
 	join_params = []
 
 	if hide_unavailable and warehouse:
-		warehouses = [warehouse]
-		if frappe.db.get_value("Warehouse", warehouse, "is_group"):
-			warehouses = frappe.db.get_descendants("Warehouse", warehouse) or [warehouse]
+		# Available anywhere the session may sell from, outside tier included
+		scope = get_session_scope(pos_profile_doc)
+		warehouses = scope["branch"] + scope["outside"]
 
 		wh_placeholders = ", ".join(["%s"] * len(warehouses))
 		extra_joins = (
@@ -1417,20 +1533,11 @@ def get_items(
 			pos_profile_doc.selling_price_list,
 		)
 
-		# Batch query stock for all items at once using Query Builder
-		stock_map = {}
+		# Batch query stock for all items across the session's warehouses
+		session_stock = {}
 		if item_codes and pos_profile_doc.warehouse:
 			stock_items = [item["item_code"] for item in items if item.get("is_stock_item")]
-			if stock_items:
-				Bin = DocType("Bin")
-				stocks = (
-					frappe.qb.from_(Bin)
-					.select(Bin.item_code, Bin.actual_qty)
-					.where(Bin.item_code.isin(stock_items))
-					.where(Bin.warehouse == pos_profile_doc.warehouse)
-					.run(as_dict=True)
-				)
-				stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
+			session_stock = get_session_stock(stock_items, pos_profile_doc)
 
 		# ===================================================================
 		# PRODUCT BUNDLE AVAILABILITY: Calculate bundle stock (bulk optimized)
@@ -1573,11 +1680,10 @@ def get_items(
 			# Example 3 - Service Item (Consulting):
 			#   is_stock_item = 0
 			#   actual_qty = 0 (not a bundle, no stock tracking)
-			item["actual_qty"] = (
-				stock_map.get(item["item_code"], 0)
-				if item.get("is_stock_item")
-				else bundle_availability_map.get(item["item_code"], 0)
-			)
+			if item.get("is_stock_item"):
+				_apply_session_stock(item, session_stock)
+			else:
+				item["actual_qty"] = bundle_availability_map.get(item["item_code"], 0)
 
 			# ===================================================================
 			# BUNDLE MARKER: Flag items that are Product Bundles
@@ -1732,22 +1838,9 @@ def get_items_bulk(
 
 		# Stock
 		warehouse = pos_profile_doc.warehouse
-		stock_map = {}
+		session_stock = {}
 		if warehouse and item_codes:
-			warehouses = [warehouse]
-			if frappe.db.get_value("Warehouse", warehouse, "is_group"):
-				warehouses = frappe.db.get_descendants("Warehouse", warehouse) or []
-
-			Bin = DocType("Bin")
-			stock_data = (
-				frappe.qb.from_(Bin)
-				.select(Bin.item_code, fn.Sum(Bin.actual_qty).as_("qty"))
-				.where(Bin.item_code.isin(item_codes))
-				.where(Bin.warehouse.isin(warehouses))
-				.groupby(Bin.item_code)
-				.run(as_dict=True)
-			)
-			stock_map = {s.item_code: flt(s.qty) for s in stock_data}
+			session_stock = get_session_stock(item_codes, pos_profile_doc)
 
 		# Bundle availability
 		bundle_availability_map = {}
@@ -1782,11 +1875,10 @@ def get_items_bulk(
 			item["price_list_rate_price_uom"] = item["rate"]
 
 			# Stock: stock items use Bin, bundles use component-based availability
-			item["actual_qty"] = (
-				stock_map.get(item_code, 0)
-				if item.get("is_stock_item")
-				else bundle_availability_map.get(item_code, 0)
-			)
+			if item.get("is_stock_item"):
+				_apply_session_stock(item, session_stock)
+			else:
+				item["actual_qty"] = bundle_availability_map.get(item_code, 0)
 			item["warehouse"] = warehouse
 
 			# Bundle marker
@@ -1902,12 +1994,15 @@ def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):
 		if uom:
 			item["uom"] = uom
 
-		return get_item_detail(
+		details = get_item_detail(
 			item=json.dumps(item),
 			warehouse=pos_profile_doc.warehouse,
 			price_list=pos_profile_doc.selling_price_list,
 			company=pos_profile_doc.company,
 		)
+		if item_doc.is_stock_item:
+			_apply_session_stock(details, get_session_stock([item_code], pos_profile_doc))
+		return details
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Get Item Details Error")
 		frappe.throw(_("Error fetching item details: {0}").format(str(e)))
@@ -1998,7 +2093,7 @@ def get_brands(pos_profile):
 
 
 @frappe.whitelist()
-def get_stock_quantities(item_codes, warehouse):
+def get_stock_quantities(item_codes, warehouse, pos_profile=None):
 	"""
 	Lightweight endpoint to get only stock quantities for specified items.
 	Used for real-time stock updates after invoice submission.
@@ -2006,6 +2101,8 @@ def get_stock_quantities(item_codes, warehouse):
 	Args:
 		item_codes: JSON string or list of item codes
 		warehouse: Warehouse name
+		pos_profile: When given, stock items are counted across the POS
+			session's warehouses (``get_session_stock``) instead of `warehouse`
 
 	Returns:
 		List of dicts with item_code, warehouse, and actual_qty
@@ -2064,6 +2161,7 @@ def get_stock_quantities(item_codes, warehouse):
 
 		# Create a lookup for items that have stock entries
 		item_stock_map = {row["item_code"]: row for row in stock_rows}
+		locks = get_stock_locks(normalized_codes, warehouses)
 
 		# Get bundle availability for non-stock items (bulk optimized)
 		bundle_availability_map = _calculate_bundle_availability_bulk(normalized_codes, warehouse)
@@ -2080,6 +2178,7 @@ def get_stock_quantities(item_codes, warehouse):
 				# Regular item - use Bin data
 				row = item_stock_map.get(item_code)
 				actual_qty = flt(row["actual_qty"]) if row else 0.0
+				actual_qty -= _locked_qty(locks, item_code, warehouses)
 				reserved_qty = flt(row["reserved_qty"]) if row else 0.0
 
 			result.append(
@@ -2092,6 +2191,17 @@ def get_stock_quantities(item_codes, warehouse):
 					"available_qty": actual_qty - reserved_qty,
 				}
 			)
+
+		if pos_profile:
+			session_stock = get_session_stock(
+				[row["item_code"] for row in result if row["item_code"] not in bundle_availability_map],
+				frappe.get_cached_doc("POS Profile", pos_profile),
+			)
+			for row in result:
+				if row["item_code"] not in bundle_availability_map:
+					_apply_session_stock(row, session_stock)
+					row["stock_qty"] = row["actual_qty"]
+					row["available_qty"] = row["actual_qty"] - row["reserved_qty"]
 
 		return result
 
@@ -2272,11 +2382,14 @@ def get_item_warehouse_availability(item_code=None, item_codes=None, company=Non
 			else:
 				query = query.groupby(bin_tbl.warehouse)
 
+			locks = get_stock_locks(regular_items, warehouse_names)
 			for stock in query.run(as_dict=True):
+				locked_items = [stock.item_code] if include_item_code else regular_items
+				locked = sum(locks.get((code, stock.warehouse), 0.0) for code in locked_items)
 				result.append(
 					_build_stock_entry(
 						stock.warehouse,
-						stock.actual_qty,
+						flt(stock.actual_qty) - locked,
 						stock.reserved_qty,
 						warehouse_map,
 						stock.get("item_code") if include_item_code else None,

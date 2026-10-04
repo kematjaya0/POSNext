@@ -1328,6 +1328,39 @@
 									</div>
 								</div>
 							</div>
+
+							<!-- Warehouses the row ships from (saleSplit preview) -->
+							<div
+								v-if="rowAllocation(item)"
+								class="ps-3 mt-0.5 text-[11px] sm:text-xs text-amber-700 truncate"
+								:title="rowAllocation(item).title"
+							>
+								{{ rowAllocation(item).label }}
+							</div>
+
+							<!-- Add ons (e.g. tinta), indented under their base line -->
+							<div
+								v-for="addon in item.addons || []"
+								:key="addon.item_code"
+								class="flex items-center justify-between ps-3 mt-0.5 text-[11px] sm:text-xs text-gray-600"
+							>
+								<span class="truncate">+ {{ addon.item_name }}</span>
+								<span class="font-semibold text-gray-700">{{
+									formatCurrency(addon.amount)
+								}}</span>
+							</div>
+							<button
+								v-if="
+									!item.is_free_item &&
+									!item.pos_order_row &&
+									(item.addons?.length || hasAddons(item))
+								"
+								type="button"
+								@click.stop="$emit('edit-addons', item)"
+								class="self-start mt-0.5 text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-800"
+							>
+								{{ item.addons?.length ? __("Edit Add On") : __("+ Add On") }}
+							</button>
 						</div>
 					</div>
 				</div>
@@ -1454,6 +1487,21 @@
 				</div>
 			</div>
 
+			<!-- The sale is billed to several companies (or another one) -->
+			<div
+				v-if="splitGroups.length"
+				class="mb-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800"
+			>
+				<div class="font-semibold">
+					{{ __("This sale becomes {0} invoices", [splitGroups.length]) }}
+				</div>
+				<div class="flex flex-wrap gap-x-3">
+					<span v-for="group in splitGroups" :key="group.company" :title="group.company">
+						{{ group.abbr }} ≈ {{ formatCurrency(group.amount) }}
+					</span>
+				</div>
+			</div>
+
 			<!-- Grand Total -->
 			<div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-2.5 mb-1.5">
 				<div class="flex items-center justify-between">
@@ -1496,15 +1544,18 @@
 							d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
 						/>
 					</svg>
-					<span>{{
-						approvalPreview.needs_approval ? __("Checkout (perlu approval)") : __("Checkout")
+					<span v-if="spgMode">{{ __("Simpan Pesanan") }}</span>
+					<span v-else>{{
+						approvalPreview.needs_approval
+							? __("Checkout (perlu approval)")
+							: __("Checkout")
 					}}</span>
 				</button>
 
 				<!-- Hold Order Button (Secondary - 50% width) -->
 				<button
 					type="button"
-					v-if="items.length > 0"
+					v-if="items.length > 0 && !spgMode"
 					@click="$emit('save-draft')"
 					class="flex-1 py-2.5 px-2 rounded-lg font-semibold text-xs text-orange-700 bg-orange-50 hover:bg-orange-100 active:bg-orange-200 transition-all touch-manipulation active:scale-[0.98] flex items-center justify-center"
 					:aria-label="__('Hold order as draft')"
@@ -1554,6 +1605,8 @@ import { useCartSort } from "@/composables/useCartSort";
 import { isOffline } from "@/utils/offline";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { logger } from "@/utils/logger";
+import { getAvailableAddons } from "@/utils/itemAddons";
+import { saleRowKey } from "@/utils/saleSplit";
 import { FeatherIcon } from "frappe-ui";
 
 const log = logger.create("InvoiceCart");
@@ -1567,6 +1620,25 @@ import EditItemDialog from "./EditItemDialog.vue";
  * ============================================================================
  */
 const cartStore = usePOSCartStore(); // Pinia store for cart state management
+
+// Companies the sale is billed to, when it is not just the session's own
+const splitGroups = computed(() => {
+	const { groups, company } = cartStore.saleSplit;
+	return groups.length > 1 || groups[0]?.company !== company ? groups : [];
+});
+
+function rowAllocation(item) {
+	const chunks = cartStore.saleSplit.rows.get(saleRowKey(item));
+	if (!chunks?.length) return null;
+	if (chunks.length === 1 && chunks[0].company === cartStore.saleSplit.company) return null;
+	const qty = (value) => (Number.isInteger(value) ? value : Number(value).toFixed(2));
+	// Company abbr is enough when the warehouses belong to different companies
+	const byCompany = new Set(chunks.map((c) => c.company)).size > 1;
+	return {
+		label: chunks.map((c) => `${byCompany ? c.abbr : c.warehouse} ${qty(c.qty)}`).join(" · "),
+		title: chunks.map((c) => `${c.warehouse}: ${qty(c.qty)}`).join("\n"),
+	};
+}
 
 const settingsStore = usePOSSettingsStore(); // Pinia store for POS settings
 const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions
@@ -1598,6 +1670,11 @@ const props = defineProps({
 		default: () => [],
 	},
 	customer: Object,
+	/** SPG (nextend POS Order): checkout saves an order for the cashier instead of paying */
+	spgMode: {
+		type: Boolean,
+		default: false,
+	},
 	subtotal: {
 		type: Number,
 		default: 0,
@@ -1729,6 +1806,7 @@ const emit = defineEmits([
 	"remove-offer", // (offerId) - Remove applied offer
 	"update-uom", // (itemCode, newUom) - Change item's unit of measure
 	"edit-item", // (item) - Open item edit dialog
+	"edit-addons", // (item) - Open add on dialog for a cart line
 	"view-shift", // () - View current shift details
 	"show-drafts", // () - Show draft/held orders
 	"show-history", // () - Show invoice history
@@ -2328,6 +2406,10 @@ function formatCurrency(amount) {
 	return formatCurrencyUtil(Number.parseFloat(amount || 0), props.currency);
 }
 
+function hasAddons(item) {
+	return getAvailableAddons(item).length > 0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Quantity Control Functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2493,6 +2575,8 @@ async function selectUom(item, newUom) {
  * @param {Object} item - Cart item to edit
  */
 function openEditDialog(item) {
+	// SPG order rows are read-only for the cashier (remove only)
+	if (item.pos_order_row) return;
 	selectedItem.value = { ...item };
 	showEditDialog.value = true;
 }

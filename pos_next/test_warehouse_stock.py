@@ -21,11 +21,13 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import flt
 
-from pos_next.api.items import get_item_warehouse_stock
+from pos_next.api.items import get_item_warehouse_stock, get_session_stock
 
 ITEM = "_PNXT_TEST_WHSTOCK_ITEM"
 UOM_BOX = "_PNXT_TEST_WHSTOCK_BOX"
-OTHER_WAREHOUSE = "_PNXT_TEST_WHSTOCK_WH2"
+NATIVE_WAREHOUSE = "_PNXT_TEST_WHSTOCK_WH1"
+BRANCH_WAREHOUSE = "_PNXT_TEST_WHSTOCK_WH2"
+OUTSIDE_WAREHOUSE = "_PNXT_TEST_WHSTOCK_WH3"
 TEST_USER = "_pnxt_test_whstock_user@example.com"
 WAREHOUSE_GROUP = "_PNXT_TEST_WHSTOCK_GROUP"
 
@@ -37,20 +39,21 @@ def _resolve_company():
 	return frappe.db.get_value("Company", {"name": ["!=", ""]}, "name")
 
 
-def _resolve_warehouse(company):
-	wh = frappe.db.get_value(
-		"Warehouse",
-		{"company": company, "is_group": 0, "disabled": 0},
-		"name",
-		order_by="creation asc",
+def _ensure_warehouse(warehouse_name, company):
+	"""Dedicated test warehouses - the session scope tests set their
+	Warehouse Group, which must never touch a real warehouse."""
+	name = frappe.db.get_value("Warehouse", {"warehouse_name": warehouse_name, "company": company})
+	if name:
+		return name
+	return (
+		frappe.get_doc({"doctype": "Warehouse", "warehouse_name": warehouse_name, "company": company})
+		.insert(ignore_permissions=True)
+		.name
 	)
-	if not wh:
-		frappe.throw(f"No warehouse for company {company}.")
-	return wh
 
 
 def _ensure_pos_profile(company, warehouse):
-	profile_name = f"_PNXT_TEST_WHSTOCK_POS_PROFILE_{company}"
+	profile_name = f"_PNXT_TEST_WHSTOCK_SESSION_PROFILE_{company}"
 	if frappe.db.exists("POS Profile", profile_name):
 		return profile_name
 
@@ -85,7 +88,9 @@ class TestGetItemWarehouseStock(FrappeTestCase):
 	def setUpClass(cls):
 		super().setUpClass()
 		cls.company = _resolve_company()
-		cls.native_warehouse = _resolve_warehouse(cls.company)
+		cls.native_warehouse = _ensure_warehouse(NATIVE_WAREHOUSE, cls.company)
+		cls.branch_warehouse = _ensure_warehouse(BRANCH_WAREHOUSE, cls.company)
+		cls.outside_warehouse = _ensure_warehouse(OUTSIDE_WAREHOUSE, cls.company)
 		cls.pos_profile = _ensure_pos_profile(cls.company, cls.native_warehouse)
 
 		if not frappe.db.exists("UOM", UOM_BOX):
@@ -104,16 +109,9 @@ class TestGetItemWarehouseStock(FrappeTestCase):
 				}
 			).insert(ignore_permissions=True)
 
-		if not frappe.db.exists("Warehouse", {"warehouse_name": OTHER_WAREHOUSE, "company": cls.company}):
-			frappe.get_doc(
-				{"doctype": "Warehouse", "warehouse_name": OTHER_WAREHOUSE, "company": cls.company}
-			).insert(ignore_permissions=True)
-		cls.other_warehouse = frappe.db.get_value(
-			"Warehouse", {"warehouse_name": OTHER_WAREHOUSE, "company": cls.company}, "name"
-		)
-
 		cls._receive_stock(cls.native_warehouse, 100)
-		cls._receive_stock(cls.other_warehouse, 40)
+		cls._receive_stock(cls.branch_warehouse, 40)
+		cls._receive_stock(cls.outside_warehouse, 20)
 
 		if not frappe.db.exists("User", TEST_USER):
 			frappe.get_doc(
@@ -149,56 +147,74 @@ class TestGetItemWarehouseStock(FrappeTestCase):
 		doc.submit()
 
 	def tearDown(self):
+		frappe.set_user("Administrator")
 		# Warehouse Group has no meaningful autoname (random hash) - the label
 		# is just a display field, so look it up by label rather than assume
 		# it doubles as the name.
+		for warehouse in (self.native_warehouse, self.branch_warehouse):
+			frappe.db.set_value("Warehouse", warehouse, "warehouse_group", None)
+		frappe.db.delete("User Warehouse Group", {"parent": TEST_USER})
 		group_name = frappe.db.get_value("Warehouse Group", {"label": WAREHOUSE_GROUP}, "name")
 		if group_name:
 			frappe.delete_doc("Warehouse Group", group_name, force=True, ignore_permissions=True)
-		frappe.db.set_value("Warehouse", self.other_warehouse, "warehouse_group", None)
-		frappe.db.set_value("User", TEST_USER, "warehouse_groups", [])
+
+	def _join_branch(self):
+		"""Native + branch warehouse in one Warehouse Group the test user is in,
+		then act as that user; the outside warehouse stays ungrouped."""
+		group = frappe.get_doc({"doctype": "Warehouse Group", "label": WAREHOUSE_GROUP}).insert(
+			ignore_permissions=True
+		)
+		for warehouse in (self.native_warehouse, self.branch_warehouse):
+			frappe.db.set_value("Warehouse", warehouse, "warehouse_group", group.name)
+
+		user_doc = frappe.get_doc("User", TEST_USER)
+		user_doc.append("warehouse_groups", {"warehouse_group": group.name})
+		user_doc.save(ignore_permissions=True)
+		frappe.set_user(TEST_USER)
 
 	def test_empty_inputs_return_empty_list(self):
 		self.assertEqual(get_item_warehouse_stock("", "Nos", self.pos_profile), [])
 		self.assertEqual(get_item_warehouse_stock(ITEM, "Nos", ""), [])
 
-	def test_returns_stock_uom_quantities_without_group(self):
+	def test_without_group_session_is_native_only(self):
 		result = get_item_warehouse_stock(ITEM, "Nos", self.pos_profile)
-		by_warehouse = {row["warehouse"]: row for row in result}
 
-		self.assertIn(self.native_warehouse, by_warehouse)
-		self.assertIn(self.other_warehouse, by_warehouse)
-		self.assertEqual(by_warehouse[self.native_warehouse]["stock_qty"], 100)
-		self.assertEqual(by_warehouse[self.other_warehouse]["stock_qty"], 40)
-		self.assertFalse(by_warehouse[self.other_warehouse]["is_own"])
+		self.assertEqual([row["warehouse"] for row in result], [self.native_warehouse])
+		self.assertEqual(result[0]["tier"], "native")
+		self.assertEqual(result[0]["stock_qty"], 100)
 
 	def test_stock_converted_to_requested_uom(self):
 		result = get_item_warehouse_stock(ITEM, UOM_BOX, self.pos_profile)
-		by_warehouse = {row["warehouse"]: row for row in result}
 
 		# 100 Nos / 10 (conversion_factor) = 10 Box
-		self.assertEqual(by_warehouse[self.native_warehouse]["stock_qty"], 10)
-		self.assertEqual(by_warehouse[self.other_warehouse]["stock_qty"], 4)
+		self.assertEqual(result[0]["stock_qty"], 10)
 
-	def test_own_warehouse_via_group_sorts_first(self):
-		group = frappe.get_doc({"doctype": "Warehouse Group", "label": WAREHOUSE_GROUP}).insert(
-			ignore_permissions=True
-		)
-		frappe.db.set_value("Warehouse", self.other_warehouse, "warehouse_group", group.name)
+	def test_session_tiers_order(self):
+		self._join_branch()
+		result = get_item_warehouse_stock(ITEM, "Nos", self.pos_profile)
+		tiers = {row["warehouse"]: row["tier"] for row in result}
 
-		user_doc = frappe.get_doc("User", TEST_USER)
-		user_doc.append("warehouse_groups", {"warehouse_group": group.name})
-		user_doc.save(ignore_permissions=True)
+		self.assertEqual(result[0]["warehouse"], self.native_warehouse)
+		self.assertEqual(tiers[self.native_warehouse], "native")
+		self.assertEqual(tiers[self.branch_warehouse], "branch")
+		self.assertEqual(tiers[self.outside_warehouse], "outside")
+		self.assertEqual(result[-1]["tier"], "outside")
 
-		frappe.set_user(TEST_USER)
-		try:
-			result = get_item_warehouse_stock(ITEM, "Nos", self.pos_profile)
-		finally:
-			frappe.set_user("Administrator")
+	def test_session_stock_totals_branch_and_outside(self):
+		self._join_branch()
+		profile = frappe.get_cached_doc("POS Profile", self.pos_profile)
+		entry = get_session_stock([ITEM], profile)[ITEM]
+		abbr = frappe.get_cached_value("Company", self.company, "abbr")
 
-		self.assertEqual(result[0]["warehouse"], self.other_warehouse)
-		self.assertTrue(result[0]["is_own"])
-		# Same company in this single-company test setup - see
-		# get_item_warehouse_stock's own sort tiers for the cross-company case.
-		self.assertTrue(result[0]["is_native_company"])
-		self.assertNotEqual(result[1]["warehouse"], self.other_warehouse)
+		self.assertEqual(entry["actual_qty"], 140)
+		self.assertEqual(entry["stock_by_warehouse"], {self.native_warehouse: 100, self.branch_warehouse: 40})
+		self.assertEqual(entry["stock_by_company"], {abbr: 140})
+		# The company's other warehouses on the site may hold this test item too
+		self.assertGreaterEqual(entry["outside_qty"], 20)
+
+	def test_session_stock_without_group_is_native_only(self):
+		profile = frappe.get_cached_doc("POS Profile", self.pos_profile)
+		entry = get_session_stock([ITEM], profile)[ITEM]
+
+		self.assertEqual(entry["actual_qty"], 100)
+		self.assertEqual(entry["outside_qty"], 0)

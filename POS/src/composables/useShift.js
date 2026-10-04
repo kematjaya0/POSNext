@@ -6,58 +6,68 @@ export const shiftState = ref({
 	pos_profile: null,
 	company: null,
 	isOpen: false,
+	/** SPG (nextend POS Order): runs on a cashier's shift, saves orders instead of paying */
+	spgMode: false,
 	/** Initial elapsed ms at the moment shift data was received from server */
 	_initialElapsedMs: 0,
 	/** Local timestamp (Date.now()) when shift data was received */
 	_receivedAt: 0,
 });
 
+/**
+ * Apply a check_opening_shift-shaped response to shiftState. For an SPG
+ * (nextend override) the response may be `{spg_mode: true}` without a shift:
+ * no shift picked yet, so the SPG shift picker is shown instead of the
+ * opening dialog.
+ */
+export function applyShiftData(data) {
+	if (data?.pos_opening_shift) {
+		// Compute initial elapsed time using server timestamps
+		// (avoids timezone mismatch between server and browser)
+		let initialElapsedMs = 0;
+		if (data.server_now && data.pos_opening_shift?.period_start_date) {
+			const serverNow = new Date(data.server_now).getTime();
+			const shiftStart = new Date(data.pos_opening_shift.period_start_date).getTime();
+			initialElapsedMs = Math.max(0, serverNow - shiftStart);
+		}
+		shiftState.value = {
+			pos_opening_shift: data.pos_opening_shift,
+			pos_profile: data.pos_profile,
+			company: data.company,
+			isOpen: true,
+			spgMode: !!data.spg_mode,
+			_initialElapsedMs: initialElapsedMs,
+			_receivedAt: Date.now(),
+		};
+		// Store in localStorage for offline support
+		localStorage.setItem(
+			"pos_shift_data",
+			JSON.stringify({
+				...data,
+				_initialElapsedMs: initialElapsedMs,
+				_receivedAt: Date.now(),
+			})
+		);
+	} else {
+		shiftState.value = {
+			pos_opening_shift: null,
+			pos_profile: null,
+			company: null,
+			isOpen: false,
+			spgMode: !!data?.spg_mode,
+			_initialElapsedMs: 0,
+			_receivedAt: 0,
+		};
+		localStorage.removeItem("pos_shift_data");
+	}
+}
+
 export function useShift() {
 	// Check for existing open shift
 	const checkOpeningShift = createResource({
 		url: "pos_next.api.shifts.check_opening_shift",
 		auto: false,
-		onSuccess(data) {
-			if (data) {
-				// Compute initial elapsed time using server timestamps
-				// (avoids timezone mismatch between server and browser)
-				let initialElapsedMs = 0;
-				if (data.server_now && data.pos_opening_shift?.period_start_date) {
-					const serverNow = new Date(data.server_now).getTime();
-					const shiftStart = new Date(
-						data.pos_opening_shift.period_start_date
-					).getTime();
-					initialElapsedMs = Math.max(0, serverNow - shiftStart);
-				}
-				shiftState.value = {
-					pos_opening_shift: data.pos_opening_shift,
-					pos_profile: data.pos_profile,
-					company: data.company,
-					isOpen: true,
-					_initialElapsedMs: initialElapsedMs,
-					_receivedAt: Date.now(),
-				};
-				// Store in localStorage for offline support
-				localStorage.setItem(
-					"pos_shift_data",
-					JSON.stringify({
-						...data,
-						_initialElapsedMs: initialElapsedMs,
-						_receivedAt: Date.now(),
-					})
-				);
-			} else {
-				shiftState.value = {
-					pos_opening_shift: null,
-					pos_profile: null,
-					company: null,
-					isOpen: false,
-					_initialElapsedMs: 0,
-					_receivedAt: 0,
-				};
-				localStorage.removeItem("pos_shift_data");
-			}
-		},
+		onSuccess: applyShiftData,
 		onError(error) {
 			console.error("Error checking opening shift:", error);
 			// Try to load from localStorage
@@ -70,6 +80,7 @@ export function useShift() {
 						pos_profile: data.pos_profile,
 						company: data.company,
 						isOpen: true,
+						spgMode: !!data.spg_mode,
 						_initialElapsedMs: data._initialElapsedMs || 0,
 						_receivedAt: data._receivedAt || Date.now(),
 					};
@@ -102,6 +113,7 @@ export function useShift() {
 				pos_profile: data.pos_profile,
 				company: data.company,
 				isOpen: true,
+				spgMode: false,
 				_initialElapsedMs: 0,
 				_receivedAt: Date.now(),
 			};
@@ -141,6 +153,7 @@ export function useShift() {
 				pos_profile: null,
 				company: null,
 				isOpen: false,
+				spgMode: false,
 				_initialElapsedMs: 0,
 				_receivedAt: 0,
 			};
@@ -156,6 +169,7 @@ export function useShift() {
 	const currentShift = computed(() => shiftState.value.pos_opening_shift);
 	const currentProfile = computed(() => shiftState.value.pos_profile);
 	const currentCompany = computed(() => shiftState.value.company);
+	const isSpgMode = computed(() => shiftState.value.spgMode);
 
 	return {
 		// State
@@ -164,6 +178,7 @@ export function useShift() {
 		currentShift,
 		currentProfile,
 		currentCompany,
+		isSpgMode,
 
 		// Resources
 		checkOpeningShift,

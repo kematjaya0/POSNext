@@ -5,6 +5,8 @@ import { useSerialNumberStore } from "@/stores/serialNumber";
 import { CoalescingMutex } from "@/utils/mutex";
 import { logger } from "@/utils/logger";
 import { roundCurrency } from "@/utils/currency";
+import { getAddonCarrierItem } from "@/utils/itemAddons";
+import { generateUUID } from "@/utils/offline/uuid";
 
 const log = logger.create("Invoice");
 
@@ -33,6 +35,8 @@ export function useInvoice() {
 	const posOpeningShift = ref(null); // POS Opening Shift name
 	const additionalDiscount = ref(0);
 	const couponCode = ref(null);
+	/** nextend POS Order (SPG order) this cart pays for - its rows are read-only */
+	const posOrder = ref(null);
 	const taxRules = ref([]); // Tax rules from POS Profile
 	const taxInclusive = ref(false); // Tax inclusive setting from POS Settings
 
@@ -345,6 +349,9 @@ export function useInvoice() {
 			);
 			_cachedTotalTax.value -= itemToRemove.tax_amount || 0;
 			_cachedTotalDiscount.value -= itemToRemove.discount_amount || 0;
+			const addons = addonTotals(itemToRemove);
+			_cachedSubtotal.value -= addons.subtotal;
+			_cachedTotalTax.value -= addons.tax;
 
 			// Return serial numbers back to cache if item has serials
 			if (itemToRemove.serial_no && itemToRemove.has_serial_no) {
@@ -714,6 +721,69 @@ export function useInvoice() {
 		return totalRate;
 	}
 
+	/**
+	 * Totals of a line's add ons. Add on amounts are typed by the cashier as
+	 * the line total (not per unit) and follow the same tax mode as items.
+	 */
+	function addonTotals(item) {
+		const gross = roundCurrency(
+			(item.addons || []).reduce((sum, a) => sum + (Number.parseFloat(a.amount) || 0), 0)
+		);
+		const taxRate = calculateTotalTaxRate();
+		if (!gross || !taxRate) return { subtotal: gross, tax: 0 };
+		if (taxInclusive.value) {
+			return { subtotal: gross, tax: roundCurrency(gross - gross / (1 + taxRate / 100)) };
+		}
+		return { subtotal: gross, tax: roundCurrency((gross * taxRate) / 100) };
+	}
+
+	/**
+	 * Replace the add ons of the line matching item_code + uom.
+	 * @param {Array} addons - [{ item_code, item_name, amount }]
+	 */
+	function setItemAddons(itemCode, uom, addons) {
+		const item = invoiceItems.value.find(
+			(i) => i.item_code === itemCode && i.uom === uom && !i.is_free_item
+		);
+		if (!item) return;
+
+		const before = addonTotals(item);
+		item.addons = addons.map((a) => ({
+			item_code: a.item_code,
+			item_name: a.item_name,
+			amount: roundCurrency(Number.parseFloat(a.amount) || 0),
+		}));
+		if (item.addons.length && !item.addon_key) {
+			item.addon_key = generateUUID();
+		}
+		const after = addonTotals(item);
+		_cachedSubtotal.value += after.subtotal - before.subtotal;
+		_cachedTotalTax.value += after.tax - before.tax;
+	}
+
+	/** Sales Invoice rows for a line's add ons - see nextend.item_addon. */
+	function addonRowsForSubmission(item) {
+		const carrier = getAddonCarrierItem();
+		if (!carrier || !item.addons?.length) return [];
+		return item.addons.map((addon) => ({
+			item_code: carrier,
+			item_name: addon.item_name,
+			qty: 1,
+			rate: addon.amount,
+			price_list_rate: addon.amount,
+			warehouse: item.warehouse,
+			conversion_factor: 1,
+			discount_percentage: 0,
+			discount_amount: 0,
+			pricing_rules: "",
+			is_rate_manually_edited: 0,
+			original_rate: null,
+			is_free_item: 0,
+			custom_addon_item: addon.item_code,
+			custom_addon_parent_key: item.addon_key,
+		}));
+	}
+
 	function rebuildIncrementalCache() {
 		/**
 		 * Rebuild cache from scratch - used when bulk operations modify all items
@@ -730,6 +800,9 @@ export function useInvoice() {
 			_cachedSubtotal.value += roundCurrency(item.quantity * roundCurrency(effectiveRate));
 			_cachedTotalTax.value += item.tax_amount || 0;
 			_cachedTotalDiscount.value += item.discount_amount || 0;
+			const addons = addonTotals(item);
+			_cachedSubtotal.value += addons.subtotal;
+			_cachedTotalTax.value += addons.tax;
 		}
 
 		_cachedTotalPaid.value = 0;
@@ -909,6 +982,8 @@ export function useInvoice() {
 			is_rate_manually_edited: item.is_rate_manually_edited || 0,
 			original_rate: item.original_rate || null,
 			is_free_item: item.is_free_item || 0,
+			// Picked by the cashier: the server must not re-allocate this row
+			warehouse_manual: item.warehouse_manual ? 1 : 0,
 		});
 
 		const out = [];
@@ -924,7 +999,12 @@ export function useInvoice() {
 				continue;
 			}
 
-			out.push(mapRow(item, paidQty));
+			const row = mapRow(item, paidQty);
+			const addonRows = addonRowsForSubmission(item);
+			if (addonRows.length) {
+				row.custom_addon_key = item.addon_key;
+			}
+			out.push(row, ...addonRows);
 
 			if (fq > 0) {
 				const u = item.uom || item.stock_uom;
@@ -953,6 +1033,7 @@ export function useInvoice() {
 						is_rate_manually_edited: 0,
 						original_rate: null,
 						is_free_item: 1,
+						warehouse_manual: item.warehouse_manual ? 1 : 0,
 					});
 				}
 			}
@@ -1111,6 +1192,9 @@ export function useInvoice() {
 			is_pos: 1,
 			update_stock: 1,
 		};
+		if (posOrder.value) {
+			invoiceData.custom_pos_order = posOrder.value;
+		}
 
 		if (targetDoctype === "Sales Order") {
 			const today = new Date().toISOString().split("T")[0];
@@ -1127,7 +1211,8 @@ export function useInvoice() {
 		deliveryDate = null,
 		writeOffAmount = 0,
 		isCreditSale = false,
-		receivableAccount = null
+		receivableAccount = null,
+		directSubmit = false
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -1173,6 +1258,9 @@ export function useInvoice() {
 					is_pos: 1,
 					update_stock: 1, // Critical: Ensures stock is updated
 				};
+				if (posOrder.value) {
+					invoiceData.custom_pos_order = posOrder.value;
+				}
 
 				// "Pay on Receivable Account": route the invoice's debit_to to a chosen AR
 				if (receivableAccount) {
@@ -1191,17 +1279,23 @@ export function useInvoice() {
 					}));
 				}
 
-				const draftInvoice = await updateInvoiceResource.submit({
-					data: invoiceData,
-				});
+				// A multi-company session sends the basket unsaved: the server
+				// allocates it and may bill several companies (split_invoice.py),
+				// which a single-company draft cannot hold.
+				let invoiceDoc = invoiceData;
+				if (!directSubmit) {
+					const draftInvoice = await updateInvoiceResource.submit({
+						data: invoiceData,
+					});
 
-				let invoiceDoc = draftInvoice;
-				if (draftInvoice && typeof draftInvoice === "object" && "data" in draftInvoice) {
-					invoiceDoc = draftInvoice.data;
-				}
+					invoiceDoc = draftInvoice;
+					if (draftInvoice && typeof draftInvoice === "object" && "data" in draftInvoice) {
+						invoiceDoc = draftInvoice.data;
+					}
 
-				if (!invoiceDoc || !invoiceDoc.name) {
-					throw new Error("Failed to create draft invoice - no invoice name returned");
+					if (!invoiceDoc || !invoiceDoc.name) {
+						throw new Error("Failed to create draft invoice - no invoice name returned");
+					}
 				}
 
 				const submitData = {
@@ -1337,11 +1431,77 @@ export function useInvoice() {
 	 * Resets the invoice to a clean state.
 	 * If a POS Profile is active and has a default customer, it will be pre-selected.
 	 */
+	/**
+	 * Load a nextend POS Order (made by an SPG) into the cart for payment.
+	 * Prices were locked when the order was made, so rows are rebuilt with the
+	 * same rate/discount fields the SPG's cart submitted and marked read-only
+	 * (`is_resolved_barcode`); the cashier may only remove rows. Their stock is
+	 * already reserved for this order (`pos_order_row` skips stock checks).
+	 * Add on rows go back onto their base row as `item.addons`.
+	 *
+	 * @param {Object} order - { name, discount_amount, coupon_code, items: [POS Order Item] }
+	 */
+	function loadPosOrder(order) {
+		const addonsByKey = {};
+		for (const row of order.items) {
+			if (row.addon_parent_key) {
+				if (!addonsByKey[row.addon_parent_key]) addonsByKey[row.addon_parent_key] = [];
+				addonsByKey[row.addon_parent_key].push({
+					item_code: row.addon_item,
+					item_name: row.item_name || row.addon_item,
+					amount: Number.parseFloat(row.rate) || 0,
+				});
+			}
+		}
+
+		invoiceItems.value = order.items
+			.filter((row) => !row.addon_parent_key)
+			.map((row) => {
+				const priceListRate = Number.parseFloat(row.price_list_rate) || row.rate || 0;
+				const item = {
+					item_code: row.item_code,
+					item_name: row.item_name || row.item_code,
+					rate: priceListRate,
+					price_list_rate: priceListRate,
+					quantity: Number.parseFloat(row.qty) || 0,
+					discount_percentage: Number.parseFloat(row.discount_percentage) || 0,
+					discount_amount: Number.parseFloat(row.discount_amount) || 0,
+					tax_amount: 0,
+					amount: 0,
+					uom: row.uom,
+					stock_uom: row.stock_uom || row.uom,
+					conversion_factor: Number.parseFloat(row.conversion_factor) || 1,
+					warehouse: row.warehouse,
+					batch_no: row.batch_no,
+					serial_no: row.serial_no,
+					has_batch_no: row.batch_no ? 1 : 0,
+					has_serial_no: row.serial_no ? 1 : 0,
+					item_uoms: [],
+					pricing_rules: row.pricing_rules || "",
+					is_free_item: row.is_free_item || 0,
+					is_resolved_barcode: true,
+					pos_order_row: true,
+				};
+				if (row.addon_key && addonsByKey[row.addon_key]) {
+					item.addon_key = row.addon_key;
+					item.addons = addonsByKey[row.addon_key];
+				}
+				recalculateItem(item);
+				return item;
+			});
+
+		additionalDiscount.value = Number.parseFloat(order.discount_amount) || 0;
+		couponCode.value = order.coupon_code || null;
+		posOrder.value = order.name;
+		rebuildIncrementalCache();
+	}
+
 	function resetInvoice() {
 		invoiceItems.value = [];
 		payments.value = [];
 		additionalDiscount.value = 0;
 		couponCode.value = null;
+		posOrder.value = null;
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0;
@@ -1369,6 +1529,7 @@ export function useInvoice() {
 		payments.value = [];
 		additionalDiscount.value = 0;
 		couponCode.value = null;
+		posOrder.value = null;
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0;
@@ -1444,6 +1605,7 @@ export function useInvoice() {
 		posOpeningShift,
 		additionalDiscount,
 		couponCode,
+		posOrder,
 		taxRules,
 		taxInclusive,
 		isSubmitting,
@@ -1483,6 +1645,8 @@ export function useInvoice() {
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
 		resolveUomPricing,
+		setItemAddons,
+		loadPosOrder,
 
 		// Resources
 		updateInvoiceResource,

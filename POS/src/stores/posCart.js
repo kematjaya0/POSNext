@@ -5,6 +5,7 @@ import { usePOSShiftStore } from "@/stores/posShift";
 import { parseError } from "@/utils/errorHandler";
 import { unwrapCouponValidation } from "@/utils/invoice";
 import { shouldValidateItemStock, checkStockAvailability } from "@/utils/stockValidator";
+import { previewSaleSplit } from "@/utils/saleSplit";
 import { offlineState } from "@/utils/offline/offlineState";
 import { useToast } from "@/composables/useToast";
 import { useStockStore } from "@/stores/stock";
@@ -111,6 +112,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		recalculateItem,
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
+		setItemAddons,
+		posOrder,
+		loadPosOrder,
 	} = useInvoice();
 
 	const offersStore = usePOSOffersStore();
@@ -186,6 +190,30 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const itemCount = computed(() => invoiceItems.value.length);
 	const isEmpty = computed(() => invoiceItems.value.length === 0);
 	const hasCustomer = computed(() => !!customer.value);
+
+	// Branch warehouses / companies the session sells from (saleSplit preview)
+	watch(
+		posProfile,
+		(profile) => {
+			if (profile) stockStore.ensureScope(profile).catch(() => {});
+		},
+		{ immediate: true }
+	);
+
+	// Where each row ships from and how many invoices the sale becomes; the
+	// server makes the final call on submit (pos_next/api/split_invoice.py).
+	const saleSplit = computed(() =>
+		previewSaleSplit(invoiceItems.value, stockStore.scope, stockStore.getStockByWarehouse)
+	);
+
+	// The session sells stock of several companies: submit goes straight to the
+	// server split instead of saving a single-company draft first.
+	const isMultiCompanySession = computed(
+		() =>
+			new Set(
+				Object.values(stockStore.scope.companyByWarehouse || {}).map((info) => info.company)
+			).size > 1
+	);
 
 	// Actions
 	function addItem(item, qty = 1, _autoAdd = false, currentProfile = null) {
@@ -308,7 +336,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			deliveryDate.value,
 			writeOffAmount.value,
 			Boolean(options.isCreditSale),
-			options.receivableAccount || null
+			options.receivableAccount || null,
+			isMultiCompanySession.value && targetDoctype.value === "Sales Invoice"
 		);
 		// Reset write-off amount after successful submission
 		if (result) {
@@ -719,7 +748,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 		const skippedCodes = [];
 		const kept = invoiceItems.value.filter((item) => {
-			if (!item.is_free_item) return true;
+			// SPG order rows: stock is already reserved for the order
+			if (!item.is_free_item || item.pos_order_row) return true;
 			const requested =
 				(Number(item.quantity) || 0) * (Number(item.conversion_factor) || 1);
 			if (isFreeItemOutOfStock(item.item_code, requested)) {
@@ -1156,6 +1186,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @returns {boolean} True if any offers were removed
 	 */
 	async function reapplyOffer(currentProfile, signal = null) {
+		// SPG order prices are locked - offers must not reprice them
+		if (posOrder.value) return false;
 		// Clear offers if cart is empty
 		if (invoiceItems.value.length === 0 && appliedOffers.value.length) {
 			appliedOffers.value = [];
@@ -2281,6 +2313,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// Apply other updates
 			if (updates.quantity !== undefined) cartItem.quantity = updates.quantity;
 			if (updates.warehouse !== undefined) cartItem.warehouse = updates.warehouse;
+			if (updates.warehouse_manual) cartItem.warehouse_manual = true;
 			if (updates.discount_percentage !== undefined)
 				cartItem.discount_percentage = updates.discount_percentage;
 			if (updates.discount_amount !== undefined)
@@ -2698,7 +2731,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @returns {Promise<boolean>} true if any line's discount changed
 	 */
 	async function revalidateOffers() {
-		if (isEmpty.value) return false;
+		// SPG order prices are locked - offers must not reprice them
+		if (isEmpty.value || posOrder.value) return false;
 
 		debouncedProcessOffers.cancel();
 		offerQueue.cancel();
@@ -2841,6 +2875,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		isEmpty,
 		hasCustomer,
 		isProcessingOffers, // True when any offer operation is in progress
+		saleSplit,
+		isMultiCompanySession,
 		isSubmitting, // True when invoice submission is in progress (mutex protected)
 
 		// Actions
@@ -2870,6 +2906,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		applyOffersResource,
 		buildOfferEvaluationPayload,
 		formatItemsForSubmission,
+		setItemAddons,
+		posOrder,
+		loadPosOrder,
 
 		// Sales Order feature
 		targetDoctype,

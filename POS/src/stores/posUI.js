@@ -41,6 +41,8 @@ export const usePOSUIStore = defineStore("posUI", () => {
 
 	// Success dialog state
 	const lastInvoiceName = ref("");
+	// Every invoice of the last sale - several when it was split per company
+	const lastInvoiceNames = ref([]);
 	const lastInvoiceTotal = ref(0);
 	const lastPaidAmount = ref(0);
 	/** Full receipt payload for invoices not yet on the server (offline queue) */
@@ -92,7 +94,8 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	}
 
 	function showSuccess(invoiceName, total, paidAmount = null) {
-		lastInvoiceName.value = invoiceName;
+		lastInvoiceNames.value = Array.isArray(invoiceName) ? invoiceName : [invoiceName];
+		lastInvoiceName.value = lastInvoiceNames.value[0] || "";
 		lastInvoiceTotal.value = total;
 		lastPaidAmount.value = paidAmount !== null ? paidAmount : total;
 		showSuccessDialog.value = true;
@@ -191,6 +194,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		errorRetryAction,
 		errorRetryActionData,
 		lastInvoiceName,
+		lastInvoiceNames,
 		lastInvoiceTotal,
 		lastPaidAmount,
 		lastOfflinePrintDoc,

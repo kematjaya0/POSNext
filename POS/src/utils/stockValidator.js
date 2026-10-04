@@ -15,6 +15,9 @@ import { call } from "frappe-ui";
 export function shouldValidateItemStock(item) {
 	if (!item) return false;
 
+	// SPG order rows (nextend POS Order): their stock is already reserved for the order
+	if (item.pos_order_row) return false;
+
 	// Non-stock items are never validated
 	if (item.is_stock_item === 0 || item.is_stock_item === false) return false;
 
@@ -50,6 +53,54 @@ export function checkStockAvailability(item, requestedQty, warehouse) {
 		actualQty,
 		error: formatStockError(item.item_name, requestedQty, actualQty, wh),
 	};
+}
+
+/**
+ * Stock-UOM quantity of `itemCode` already in the cart.
+ *
+ * @param {Array}  cartItems - posCart invoiceItems
+ * @param {string} itemCode
+ * @returns {number}
+ */
+export function cartStockQty(cartItems, itemCode) {
+	return (cartItems || [])
+		.filter((row) => row.item_code === itemCode)
+		.reduce(
+			(sum, row) => sum + (Number(row.quantity) || 0) * (Number(row.conversion_factor) || 1),
+			0
+		);
+}
+
+/**
+ * Default warehouse for a cart row by the session's stock tiers: the first
+ * branch warehouse (native first) that covers `neededQty` on its own, else the
+ * branch warehouse holding the most. "outside" rows are never picked - the
+ * cashier chooses those by hand.
+ *
+ * @param {Array<{warehouse: string, stock_qty: number, tier?: string}>} rows - tier order
+ * @param {number} neededQty - Same UOM as the rows' stock_qty
+ * @returns {string|null}
+ */
+export function pickSessionWarehouse(rows, neededQty) {
+	const branch = (rows || []).filter((row) => row.tier !== "outside");
+	if (!branch.length) return null;
+	const covering = branch.find((row) => (Number(row.stock_qty) || 0) >= neededQty);
+	if (covering) return covering.warehouse;
+	return branch.reduce((best, row) =>
+		(Number(row.stock_qty) || 0) > (Number(best.stock_qty) || 0) ? row : best
+	).warehouse;
+}
+
+/**
+ * True when the POS session spans more than one warehouse for this item
+ * (nextend Warehouse Group, or stock elsewhere) - the cashier then picks the
+ * warehouse in the item dialog instead of the row going straight to the cart.
+ *
+ * @param {Object} item - Item payload from get_items / get_items_bulk
+ * @returns {boolean}
+ */
+export function hasWarehouseChoice(item) {
+	return Object.keys(item?.stock_by_warehouse || {}).length > 1 || (item?.outside_qty || 0) > 0;
 }
 
 /**

@@ -5,7 +5,8 @@ import { computed, ref } from "vue";
 
 export const usePOSShiftStore = defineStore("posShift", () => {
 	// Use the existing shift composable
-	const { currentProfile, currentShift, hasOpenShift, checkOpeningShift } = useShift();
+	const { currentProfile, currentShift, hasOpenShift, isSpgMode, checkOpeningShift } =
+		useShift();
 
 	// Additional shift state
 	const currentTime = ref("");
@@ -90,6 +91,7 @@ export const usePOSShiftStore = defineStore("posShift", () => {
 		currentProfile,
 		currentShift,
 		hasOpenShift,
+		isSpgMode,
 		currentTime,
 		shiftDuration,
 		shiftTimerPaused,

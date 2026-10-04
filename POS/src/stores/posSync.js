@@ -25,6 +25,7 @@ import {
 	cacheUnpaidSummary,
 } from "@/utils/offline";
 import { call } from "@/utils/apiWrapper";
+import { refreshAddonCatalog } from "@/utils/itemAddons";
 import { logger } from "@/utils/logger";
 import { offlineState } from "@/utils/offline/offlineState";
 import { offlineWorker } from "@/utils/offline/workerClient";
@@ -303,6 +304,8 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 			} catch (error) {
 				log.error("Failed to load sales persons", error);
 			}
+
+			await refreshAddonCatalog();
 
 			// Load customers if cache needs refresh
 			if (!cacheReady || needsRefresh) {

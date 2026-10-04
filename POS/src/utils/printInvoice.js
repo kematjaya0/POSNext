@@ -13,8 +13,11 @@ const DEFAULT_PRINT_FORMAT = "POS Next Receipt";
 // Shared helpers
 // ============================================================================
 
+// Receipt amounts as "Rp 251.004" - same as the POS Next Receipt print format
+const receiptNumber = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 });
+
 function formatCurrency(amount) {
-	return Number.parseFloat(amount || 0).toFixed(2);
+	return `Rp ${receiptNumber.format(Math.round(Number.parseFloat(amount || 0)))}`;
 }
 
 /**
@@ -154,19 +157,47 @@ const RECEIPT_STYLES = `
 /**
  * Inner receipt HTML (no shell). Used for local/offline invoices and QZ Tray.
  */
+/**
+ * Receipt rows with add ons (tinta) folded into their base line's price, as
+ * nextend's Sales Invoice before_print does for server-rendered prints.
+ */
+function foldAddonRows(items) {
+	const addonTotal = {};
+	for (const item of items) {
+		if (!item.custom_addon_parent_key) continue;
+		const qty = Number(item.quantity || item.qty) || 1;
+		const amount = Number(item.amount ?? (Number(item.rate) || 0) * qty) || 0;
+		addonTotal[item.custom_addon_parent_key] =
+			(addonTotal[item.custom_addon_parent_key] || 0) + amount;
+	}
+	return items
+		.filter((item) => !item.custom_addon_parent_key)
+		.map((item) => {
+			const extra = item.custom_addon_key ? addonTotal[item.custom_addon_key] : 0;
+			const qty = Number(item.quantity || item.qty) || 0;
+			if (!extra || !qty) return item;
+			const perUnit = extra / qty;
+			const rate = (Number(item.rate) || 0) + perUnit;
+			const priceListRate = item.price_list_rate
+				? Number(item.price_list_rate) + perUnit
+				: item.price_list_rate;
+			return {
+				...item,
+				rate,
+				price_list_rate: priceListRate,
+				discount_percentage:
+					item.discount_percentage && priceListRate
+						? (1 - rate / priceListRate) * 100
+						: item.discount_percentage,
+			};
+		});
+}
+
 export function buildReceiptHTML(invoiceData) {
-	const items = invoiceData.items || [];
+	const items = foldAddonRows(invoiceData.items || []);
 	const paidAmount = derivePaidAmount(invoiceData);
 	const itemsHtml = items
 		.map((item) => {
-			if (item.custom_addon_parent_key) {
-				// Add on (tinta etc.) printed indented under its base line.
-				return `
-						<div class="item-details" style="padding-left: 12px; font-size: 0.9em;">
-							<span>+ ${item.item_name || item.custom_addon_item}</span>
-							<span>${formatCurrency(item.rate || 0)}</span>
-						</div>`;
-			}
 			const hasDiscount =
 				(item.discount_percentage && Number.parseFloat(item.discount_percentage) > 0) ||
 				(item.discount_amount && Number.parseFloat(item.discount_amount) > 0);

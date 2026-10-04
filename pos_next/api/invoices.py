@@ -13,6 +13,7 @@ from erpnext.stock.doctype.batch.batch import get_batch_no, get_batch_qty
 from frappe import _
 from frappe.utils import cint, cstr, flt, get_datetime, nowdate, nowtime
 
+from pos_next.pos_next.doctype.pos_coupon.pos_coupon import INVOICE_COUPON_FIELD
 from pos_next.promotions.engine import (
 	CROSS_CART_MODES,
 	append_pricing_rule,
@@ -1501,6 +1502,12 @@ def update_invoice(data):
 		data = json.loads(data) if isinstance(data, str) else data
 		data = _strip_server_managed_fields(data)
 
+		# The payload's coupon_code is a POS Coupon code. Kept off the document:
+		# Sales Invoice.coupon_code is ERPNext's Link to Coupon Code (see
+		# pos_coupon.INVOICE_COUPON_FIELD), stored below once validated.
+		coupon_in_payload = "coupon_code" in data
+		coupon_code = data.pop("coupon_code", None)
+
 		pos_profile = data.get("pos_profile")
 		doctype = data.get("doctype", "Sales Invoice")
 
@@ -1811,7 +1818,6 @@ def update_invoice(data):
 				invoice_doc.base_paid_amount = flt(sum(p.base_amount or 0 for p in invoice_doc.payments))
 
 		# Validate and track POS Coupon if coupon_code is provided
-		coupon_code = data.get("coupon_code")
 		if coupon_code:
 			# Validate POS Coupon exists and is valid
 			if frappe.db.table_exists("POS Coupon"):
@@ -1830,7 +1836,10 @@ def update_invoice(data):
 					frappe.throw(_(error_msg))
 
 				# Store coupon code on invoice for tracking
-				invoice_doc.coupon_code = coupon_code
+				invoice_doc.set(INVOICE_COUPON_FIELD, coupon_code)
+		elif coupon_in_payload:
+			# Coupon removed from the cart.
+			invoice_doc.set(INVOICE_COUPON_FIELD, None)
 
 		# Validate stock availability before saving draft
 		# is_stock_item may not be set on unsaved doc items (frontend doesn't send it),
@@ -2190,7 +2199,9 @@ def submit_invoice(invoice=None, data=None):
 		else:
 			invoice_doc = frappe.get_doc(doctype, invoice_name)
 			existing_customer = invoice_doc.customer
-			invoice_doc.update(invoice)
+			invoice_doc.update({k: v for k, v in invoice.items() if k != "coupon_code"})
+			if invoice.get("coupon_code"):
+				invoice_doc.set(INVOICE_COUPON_FIELD, invoice["coupon_code"])
 			if not invoice_doc.get("customer") and existing_customer:
 				invoice_doc.customer = existing_customer
 

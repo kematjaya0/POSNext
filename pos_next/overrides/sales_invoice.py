@@ -8,9 +8,9 @@ Handles wallet payments that require party information for Receivable accounts.
 """
 
 import frappe
-from frappe import _
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 from erpnext.accounts.utils import get_account_currency
+from frappe import _
 from frappe.utils import cint, flt
 
 
@@ -102,6 +102,41 @@ def _resolve_pos_customer(invoice_doc):
 	return None
 
 
+def _foreign_company_pos_profile(pos_profile, company):
+	"""POS Profile values for a sale billed to another company of the branch.
+
+	A branch runs one POS Profile, yet a sale can take stock from another
+	company's warehouse (PT/CV split). That invoice keeps the cashier's profile
+	(naming, shift, price list, payment modes) but every value bound to the
+	profile's company comes from `company`'s defaults instead.
+	"""
+	from erpnext.setup.doctype.company.company import get_default_company_address
+
+	pos = frappe.get_cached_doc("POS Profile", pos_profile).as_dict()
+	defaults = frappe.get_cached_value(
+		"Company", company, ["cost_center", "write_off_account", "default_cash_account"], as_dict=True
+	)
+	pos.update(
+		{
+			"company": company,
+			"cost_center": defaults.cost_center,
+			"write_off_account": defaults.write_off_account,
+			"write_off_cost_center": defaults.cost_center,
+			"account_for_change_amount": defaults.default_cash_account,
+			"taxes_and_charges": frappe.db.get_value(
+				"Sales Taxes and Charges Template",
+				{"company": company, "is_default": 1, "disabled": 0},
+				"name",
+			),
+			"company_address": get_default_company_address(company),
+			"income_account": None,
+			"expense_account": None,
+			"warehouse": None,
+		}
+	)
+	return pos
+
+
 class CustomSalesInvoice(SalesInvoice):
 	"""
 	Custom Sales Invoice class that handles wallet payments correctly.
@@ -110,6 +145,63 @@ class CustomSalesInvoice(SalesInvoice):
 	party information in the GL entry. This override adds party_type and party
 	for wallet payment methods marked with is_wallet_payment.
 	"""
+
+	def is_foreign_company_pos(self):
+		if not cint(self.is_pos) or not self.pos_profile or not self.company:
+			return False
+		return frappe.get_cached_value("POS Profile", self.pos_profile, "company") != self.company
+
+	def set_pos_fields(self, for_validate=False):
+		if not self.is_foreign_company_pos():
+			return super().set_pos_fields(for_validate)
+
+		# Mirrors SalesInvoice.set_pos_fields, fed the company-adjusted profile.
+		from erpnext.accounts.doctype.sales_invoice.sales_invoice import update_multi_mode_option
+		from erpnext.stock.get_item_details import ItemDetailsCtx, get_pos_profile_item_details_
+
+		pos = _foreign_company_pos_profile(self.pos_profile, self.company)
+
+		if not for_validate:
+			update_multi_mode_option(self, pos)
+			self.tax_category = pos.get("tax_category")
+			self.ignore_pricing_rule = pos.ignore_pricing_rule
+			if not self.customer:
+				self.customer = pos.customer
+
+		self.account_for_change_amount = pos.account_for_change_amount
+		for fieldname in (
+			"currency",
+			"letter_head",
+			"tc_name",
+			"select_print_heading",
+			"write_off_account",
+			"taxes_and_charges",
+			"write_off_cost_center",
+			"apply_discount_on",
+			"cost_center",
+		):
+			if (not for_validate) or (for_validate and not self.get(fieldname)):
+				self.set(fieldname, pos.get(fieldname))
+
+		self.company_address = pos.company_address
+		if not self.selling_price_list:
+			self.selling_price_list = pos.selling_price_list
+
+		for item in self.get("items"):
+			if item.get("item_code"):
+				details = get_pos_profile_item_details_(
+					ItemDetailsCtx(item.as_dict()), pos, pos, update_data=True
+				)
+				for fname, val in details.items():
+					if (not for_validate) or (for_validate and not item.get(fname)):
+						item.set(fname, val)
+
+		if self.tc_name and not self.terms:
+			self.terms = frappe.db.get_value("Terms and Conditions", self.tc_name, "terms")
+		if self.taxes_and_charges and not len(self.get("taxes")):
+			self.set_taxes()
+
+		return pos
 
 	def validate(self):
 		if cint(self.is_pos):

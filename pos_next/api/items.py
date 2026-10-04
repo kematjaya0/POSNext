@@ -171,8 +171,29 @@ def get_session_scope(pos_profile_doc):
 
 @frappe.whitelist()
 def get_session_warehouses(pos_profile):
-	"""``get_session_scope`` for the frontend (filters realtime stock events)."""
-	return get_session_scope(frappe.get_cached_doc("POS Profile", pos_profile))
+	"""``get_session_scope`` for the frontend (filters realtime stock events).
+
+	Adds ``company_by_warehouse`` (``{warehouse: {company, abbr}}`` for the
+	branch) so the cart can preview how a sale splits per company.
+	"""
+	profile = frappe.get_cached_doc("POS Profile", pos_profile)
+	scope = get_session_scope(profile)
+	rows = frappe.get_all(
+		"Warehouse", filters={"name": ["in", scope["branch"]]}, fields=["name", "company"]
+	)
+	abbr = dict(
+		frappe.get_all(
+			"Company",
+			filters={"name": ["in", list({row.company for row in rows})]},
+			fields=["name", "abbr"],
+			as_list=True,
+		)
+	)
+	scope["company"] = profile.company
+	scope["company_by_warehouse"] = {
+		row.name: {"company": row.company, "abbr": abbr.get(row.company)} for row in rows
+	}
+	return scope
 
 
 def get_session_stock(item_codes, pos_profile_doc):

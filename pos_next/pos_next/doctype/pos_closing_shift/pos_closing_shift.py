@@ -46,6 +46,7 @@ class POSClosingShift(Document):
 				"user": self.user,
 				"docstatus": 1,
 				"pos_opening_shift": self.pos_opening_shift,
+				"company": self.company,
 				"name": ["!=", self.name],
 			},
 		)
@@ -74,10 +75,13 @@ class POSClosingShift(Document):
 
 	def on_submit(self):
 		opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
-		opening_entry.pos_closing_shift = self.name
-		opening_entry.set_status()
-		self.delete_draft_invoices()
-		opening_entry.save()
+		# Other companies' closings of the same shift leave it open; the
+		# opening company's closing is submitted last and closes it.
+		if self.company == opening_entry.company:
+			opening_entry.pos_closing_shift = self.name
+			opening_entry.set_status()
+			self.delete_draft_invoices()
+			opening_entry.save()
 		# link invoices with this closing shift so ERPNext can block edits
 		self._set_closing_entry_invoices()
 
@@ -410,6 +414,7 @@ def get_payments_entries(pos_opening_shift):
 		},
 		fields=[
 			"name",
+			"company",
 			"mode_of_payment",
 			"paid_amount",
 			"base_paid_amount",
@@ -548,13 +553,63 @@ def _process_invoice(invoice, invoice_field, company_currency, cash_mode, paymen
 
 @frappe.whitelist()
 def make_closing_shift_from_opening(opening_shift):
+	"""Build one closing shift per company that has activity in the shift.
+
+	A cashier sells stock of several companies (PT/CV) from one shift, so each
+	company gets its own POS Closing Shift and its own reconciliation. The
+	opening company always comes first: it carries the opening balance and its
+	document is the one that closes the opening shift.
+	"""
 	opening_shift = json.loads(opening_shift)
 	doctype = "Sales Invoice"
-	invoice_field = "sales_invoice"
 
 	submit_printed_invoices(opening_shift.get("name"), doctype)
 
-	# Initialize closing shift document
+	primary_company = opening_shift.get("company")
+	invoices = get_pos_invoices(opening_shift.get("name"), doctype)
+	payment_entries = get_payments_entries(opening_shift.get("name"))
+
+	other_companies = {d.get("company") for d in invoices + payment_entries} - {primary_company, None}
+	companies = [primary_company, *sorted(other_companies)]
+
+	closings = [
+		_build_company_closing(
+			opening_shift,
+			company,
+			[d for d in invoices if d.get("company") == company],
+			[d for d in payment_entries if d.get("company") == company],
+			with_opening_balance=company == primary_company,
+		)
+		for company in companies
+	]
+
+	result = frappe._dict(
+		{
+			"pos_opening_shift": opening_shift.get("name"),
+			"period_start_date": opening_shift.get("period_start_date"),
+			"pos_profile": opening_shift.get("pos_profile"),
+			"user": opening_shift.get("user"),
+			"company": primary_company,
+			"companies": closings,
+		}
+	)
+	for field in (
+		"grand_total",
+		"net_total",
+		"total_quantity",
+		"returns_total",
+		"returns_count",
+		"sales_total",
+		"sales_count",
+	):
+		result[field] = sum(flt(c.get(field)) for c in closings)
+
+	return result
+
+
+def _build_company_closing(opening_shift, company, invoices, payment_entries, with_opening_balance):
+	invoice_field = "sales_invoice"
+
 	closing_shift = frappe.new_doc("POS Closing Shift")
 	closing_shift.update(
 		{
@@ -563,11 +618,11 @@ def make_closing_shift_from_opening(opening_shift):
 			"period_end_date": frappe.utils.get_datetime(),
 			"pos_profile": opening_shift.get("pos_profile"),
 			"user": opening_shift.get("user"),
-			"company": opening_shift.get("company"),
+			"company": company,
 		}
 	)
 
-	company_currency = frappe.get_cached_value("Company", closing_shift.company, "default_currency")
+	company_currency = frappe.get_cached_value("Company", company, "default_currency")
 	cash_mode = _get_cash_mode_of_payment(opening_shift.get("pos_profile"))
 
 	# Initialize collections
@@ -586,9 +641,10 @@ def make_closing_shift_from_opening(opening_shift):
 		"sales_count": 0,
 	}
 
-	# Add opening balances to payments
+	# Seed the shift's payment modes; only the opening company holds the
+	# opening balance, the others start from zero.
 	for detail in opening_shift.get("balance_details", []):
-		opening_amount = flt(detail.get("amount"))
+		opening_amount = flt(detail.get("amount")) if with_opening_balance else 0
 		payments.append(
 			frappe._dict(
 				{
@@ -600,14 +656,13 @@ def make_closing_shift_from_opening(opening_shift):
 		)
 
 	# Process invoices
-	invoices = get_pos_invoices(opening_shift.get("name"), doctype)
 	for invoice in invoices:
 		txn = _process_invoice(invoice, invoice_field, company_currency, cash_mode, payments, taxes, summary)
 		pos_transactions.append(txn)
 
 	# Process payment entries
 	pos_payments_table = []
-	for py in get_payments_entries(opening_shift.get("name")):
+	for py in payment_entries:
 		pos_payments_table.append(
 			frappe._dict(
 				{
@@ -656,12 +711,29 @@ def make_closing_shift_from_opening(opening_shift):
 
 @frappe.whitelist()
 def submit_closing_shift(closing_shift):
+	"""Submit the closing shift of every company in one transaction.
+
+	Accepts the payload of ``make_closing_shift_from_opening`` (with
+	``companies``) or a single closing shift dict. The opening company is
+	submitted last because its ``on_submit`` closes the opening shift, which
+	the other companies' ``validate`` still needs open. Returns the submitted
+	names, opening company last.
+	"""
 	closing_shift = json.loads(closing_shift)
-	closing_shift_doc = frappe.get_doc(closing_shift)
-	closing_shift_doc.flags.ignore_permissions = True
-	closing_shift_doc.save()
-	closing_shift_doc.submit()
-	return closing_shift_doc.name
+	closings = closing_shift.get("companies") or [closing_shift]
+	primary_company = frappe.db.get_value(
+		"POS Opening Shift", closings[0].get("pos_opening_shift"), "company"
+	)
+	closings = sorted(closings, key=lambda c: c.get("company") == primary_company)
+
+	names = []
+	for closing in closings:
+		closing_shift_doc = frappe.get_doc({**closing, "doctype": "POS Closing Shift"})
+		closing_shift_doc.flags.ignore_permissions = True
+		closing_shift_doc.save()
+		closing_shift_doc.submit()
+		names.append(closing_shift_doc.name)
+	return names
 
 
 def submit_printed_invoices(pos_opening_shift, doctype):

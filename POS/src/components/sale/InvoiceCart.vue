@@ -801,6 +801,42 @@
 						}}</span>
 					</button>
 
+					<!-- SPG Order Queue (nextend POS Order) -->
+					<button
+						v-if="!spgMode"
+						type="button"
+						@click="$emit('show-spg-queue')"
+						class="relative flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-teal-300 hover:bg-teal-50 active:bg-teal-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
+						:title="__('Lihat antrian pesanan dari SPG')"
+					>
+						<span
+							v-if="spgQueueCount > 0"
+							class="absolute top-1.5 end-1.5 min-w-[1.25rem] text-[10px] font-semibold bg-teal-600 text-white px-1.5 py-0.5 rounded-full"
+						>
+							{{ spgQueueCount }}
+						</span>
+						<div
+							class="w-9 h-9 sm:w-10 sm:h-10 bg-teal-50 rounded-full flex items-center justify-center mb-2 group-hover:bg-teal-100 transition-colors"
+						>
+							<svg
+								class="w-5 h-5 text-teal-600"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"
+								/>
+							</svg>
+						</div>
+						<span class="text-[11px] sm:text-xs font-semibold text-gray-700">{{
+							__("Antrian SPG")
+						}}</span>
+					</button>
+
 					<!-- Invoice History -->
 					<button
 						type="button"
@@ -1675,6 +1711,11 @@ const props = defineProps({
 		type: Boolean,
 		default: false,
 	},
+	/** Cashier: Pending SPG orders waiting in this branch (badge on the queue button) */
+	spgQueueCount: {
+		type: Number,
+		default: 0,
+	},
 	subtotal: {
 		type: Number,
 		default: 0,
@@ -1809,6 +1850,7 @@ const emit = defineEmits([
 	"edit-addons", // (item) - Open add on dialog for a cart line
 	"view-shift", // () - View current shift details
 	"show-drafts", // () - Show draft/held orders
+	"show-spg-queue", // () - Show Pending SPG orders of this branch
 	"show-history", // () - Show invoice history
 	"show-return", // () - Open return invoice dialog
 	"close-shift", // () - Close current shift

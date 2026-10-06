@@ -95,6 +95,32 @@
 					</button>
 					<button
 						v-if="canAccessShiftActions"
+						@click="openSpgQueueDialog"
+						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-teal-50 flex items-center gap-3 transition-colors relative"
+					>
+						<svg
+							class="w-5 h-5 text-teal-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"
+							/>
+						</svg>
+						<span>{{ __("Antrian Pesanan SPG") }}</span>
+						<span
+							v-if="spgQueueCount > 0"
+							class="ms-auto text-xs bg-teal-600 text-white px-1.5 py-0.5 rounded-full"
+						>
+							{{ spgQueueCount }}
+						</span>
+					</button>
+					<button
+						v-if="canAccessShiftActions"
 						@click="openHistoryDialog"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-indigo-50 flex items-center gap-3 transition-colors"
 					>
@@ -348,7 +374,9 @@
 								:cart-items="cartStore.invoiceItems"
 								:currency="shiftStore.profileCurrency"
 								@item-selected="handleItemSelected"
+								:show-order-camera="canAccessShiftActions"
 								@pos-order-scanned="handlePosOrderScanned"
+								@open-order-camera="showOrderCameraDialog = true"
 							/>
 						</div>
 					</keep-alive>
@@ -395,6 +423,7 @@
 								:items="cartStore.invoiceItems"
 								:customer="cartStore.customer"
 								:spg-mode="shiftStore.isSpgMode"
+								:spg-queue-count="spgQueueCount"
 								:subtotal="cartStore.subtotal"
 								:tax-amount="cartStore.totalTax"
 								:discount-amount="cartStore.totalDiscount"
@@ -429,6 +458,7 @@
 								@edit-addons="openAddonDialog"
 								@view-shift="uiStore.showOpenShiftDialog = true"
 								@show-drafts="uiStore.showDraftDialog = true"
+								@show-spg-queue="openSpgQueueDialog"
 								@show-history="uiStore.showHistoryDialog = true"
 								@show-return="uiStore.showReturnDialog = true"
 								@close-shift="handleCloseShift()"
@@ -575,6 +605,20 @@
 			<SpgOrdersDialog
 				v-model="showSpgOrdersDialog"
 				:currency="shiftStore.profileCurrency"
+			/>
+			<SpgQueueDialog
+				ref="spgQueueDialogRef"
+				v-model="showSpgQueueDialog"
+				:shift-name="shiftStore.currentShift?.name"
+				:offline="offlineStore.isOffline"
+				:currency="shiftStore.profileCurrency"
+				@load-order="handleLoadQueueOrder"
+				@queue-changed="(count) => (spgQueueCount = count)"
+				@open-camera="openOrderCameraFromQueue"
+			/>
+			<OrderQrCameraDialog
+				v-model="showOrderCameraDialog"
+				@scanned="handlePosOrderScanned"
 			/>
 
 			<!-- Shift Opening Dialog -->
@@ -1089,8 +1133,10 @@ let _posInitPromise = null;
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import SpgOrdersDialog from "@/components/sale/SpgOrdersDialog.vue";
+import OrderQrCameraDialog from "@/components/sale/OrderQrCameraDialog.vue";
+import SpgQueueDialog from "@/components/sale/SpgQueueDialog.vue";
 import SpgShiftDialog from "@/components/sale/SpgShiftDialog.vue";
-import { printSpgOrderSlip } from "@/utils/printSpgOrder";
+import { openSpgOrderSlipWindow, printSpgOrderSlip } from "@/utils/printSpgOrder";
 import { orderFromQrPayload } from "@/utils/posOrderCode";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import SessionLockScreen from "@/components/common/SessionLockScreen.vue";
@@ -1423,6 +1469,69 @@ const canAccessShiftActions = computed(() => shiftStore.hasOpenShift && !shiftSt
 const showSpgShiftDialog = ref(false);
 const showSpgOrdersDialog = ref(false);
 const savingSpgOrder = ref(false);
+
+// Cashier: queue of Pending SPG orders in this shift's Warehouse Group
+const showSpgQueueDialog = ref(false);
+const spgQueueDialogRef = ref(null);
+const spgQueueCount = ref(0);
+let spgQueueGroup = null;
+let spgQueueRefreshTimer = null;
+const showOrderCameraDialog = ref(false);
+
+function openSpgQueueDialog() {
+	if (!canAccessShiftActions.value) {
+		return;
+	}
+	showSpgQueueDialog.value = true;
+}
+
+async function refreshSpgQueue() {
+	if (!canAccessShiftActions.value || offlineStore.isOffline) {
+		return;
+	}
+	if (showSpgQueueDialog.value) {
+		// The open dialog reloads its list and reports the count back
+		spgQueueDialogRef.value?.loadOrders();
+		return;
+	}
+	try {
+		const queue = await call("nextend.pos_order.get_queue_orders", {
+			pos_opening_shift: shiftStore.currentShift?.name,
+		});
+		spgQueueGroup = queue?.warehouse_group || null;
+		spgQueueCount.value = queue?.orders?.length || 0;
+	} catch (error) {
+		log.warn("Failed to load SPG order queue", error);
+	}
+}
+
+/** nextend publishes this whenever an order is created, cancelled, paid or expired. */
+function handleSpgQueueEvent(data) {
+	if (spgQueueGroup && data?.warehouse_group !== spgQueueGroup) {
+		return;
+	}
+	clearTimeout(spgQueueRefreshTimer);
+	spgQueueRefreshTimer = setTimeout(refreshSpgQueue, 500);
+}
+
+watch(
+	() => [canAccessShiftActions.value && shiftStore.currentShift?.name, offlineStore.isOffline],
+	([shiftName, isOffline]) => {
+		spgQueueGroup = null;
+		spgQueueCount.value = 0;
+		if (shiftName && !isOffline) refreshSpgQueue();
+	},
+	{ immediate: true }
+);
+
+onMounted(() => {
+	window.frappe?.realtime?.on("nextend_pos_order_queue", handleSpgQueueEvent);
+});
+
+onUnmounted(() => {
+	window.frappe?.realtime?.off("nextend_pos_order_queue", handleSpgQueueEvent);
+	clearTimeout(spgQueueRefreshTimer);
+});
 
 /** Desk link only for users with the Nexus POS Manager role (from bootstrap API). */
 const canSwitchToDesk = computed(() => Boolean(bootstrapStore.data?.can_switch_to_desk));
@@ -2317,6 +2426,20 @@ async function handlePosOrderScanned(code) {
 	showSuccess(__("Pesanan {0} dimuat", [order.name]));
 }
 
+/** Cashier picked an order from the SPG queue - same path as a scanned slip. */
+async function handleLoadQueueOrder(name) {
+	await handlePosOrderScanned({ name });
+	if (cartStore.posOrder === name) {
+		showSpgQueueDialog.value = false;
+	}
+}
+
+// Dialogs are not stacked: the queue closes while the camera is open
+function openOrderCameraFromQueue() {
+	showSpgQueueDialog.value = false;
+	showOrderCameraDialog.value = true;
+}
+
 async function fillOrderItemNamesFromCache(order) {
 	for (const row of order.items) {
 		const code = row.addon_item || row.item_code;
@@ -2357,6 +2480,8 @@ async function handleSaveSpgOrder() {
 	}));
 
 	savingSpgOrder.value = true;
+	// Opened before awaiting the server, or the browser blocks it as a popup
+	const printWindow = openSpgOrderSlipWindow();
 	try {
 		const order = await call("nextend.pos_order.create_order", {
 			order: JSON.stringify({
@@ -2375,11 +2500,12 @@ async function handleSaveSpgOrder() {
 		showSuccess(__("Pesanan {0} tersimpan", [order.name]));
 
 		try {
-			printSpgOrderSlip(order);
+			printSpgOrderSlip(order, shiftStore.profileCurrency, printWindow);
 		} catch (error) {
 			showError(error.message);
 		}
 	} catch (error) {
+		printWindow?.close();
 		showError(error?.messages?.[0] || error?.message || __("Gagal menyimpan pesanan"));
 	} finally {
 		savingSpgOrder.value = false;

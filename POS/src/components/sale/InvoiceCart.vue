@@ -1374,6 +1374,14 @@
 								{{ rowAllocation(item).label }}
 							</div>
 
+							<div
+								v-if="item.keterangan"
+								class="ps-3 mt-0.5 text-[11px] sm:text-xs text-gray-500 italic truncate"
+								:title="item.keterangan"
+							>
+								{{ item.keterangan }}
+							</div>
+
 							<!-- Add ons (e.g. tinta), indented under their base line -->
 							<div
 								v-for="addon in item.addons || []"

@@ -2477,6 +2477,7 @@ async function handleSaveSpgOrder() {
 		addon_item: row.custom_addon_item,
 		addon_key: row.custom_addon_key,
 		addon_parent_key: row.custom_addon_parent_key,
+		keterangan: row.custom_keterangan,
 	}));
 
 	savingSpgOrder.value = true;
@@ -2898,6 +2899,7 @@ async function handleOptionSelected(option) {
 				rate: pricing.rate,
 				price_list_rate: pricing.price_list_rate,
 				...(option.warehouse ? { warehouse: option.warehouse } : {}),
+				keterangan: option.keterangan || "",
 			};
 
 			if (itemToAdd.has_batch_no || itemToAdd.has_serial_no) {

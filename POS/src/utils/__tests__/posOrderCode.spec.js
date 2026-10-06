@@ -5,7 +5,8 @@ import { orderFromQrPayload, parsePosOrderCode } from "@/utils/posOrderCode";
 // Payload as built by nextend.pos_order.build_qr_payload (trailing empty columns dropped).
 const QR =
 	'{"c":"HEMAT","d":500,"i":[["BASE",0,2,"Nos",9000,10000,2000,10,1,0,"","k1"],' +
-	'["ADDON-TINTING",0,1,"Nos",5000,5000,0,0,1,0,"TINTA-A","","k1"],["GRATIS",1,1,"Nos",0,0,0,0,1,1]],' +
+	'["ADDON-TINTING",0,1,"Nos",5000,5000,0,0,1,0,"TINTA-A","","k1"],["GRATIS",1,1,"Nos",0,0,0,0,1,1],' +
+	'["CAT",0,1,"Nos",1000,1000,0,0,1,0,"","","","warna biru"]],' +
 	'"o":"SPO-260927-0001","sh":"POSA-OS-26-0000004","sp":"SPG A","v":1,"w":["DKB - PT","DKB - CV"]}';
 
 describe("parsePosOrderCode", () => {
@@ -19,7 +20,7 @@ describe("parsePosOrderCode", () => {
 	it("recognises the order QR", () => {
 		const code = parsePosOrderCode(QR);
 		expect(code.name).toBe("SPO-260927-0001");
-		expect(code.payload.i).toHaveLength(3);
+		expect(code.payload.i).toHaveLength(4);
 	});
 
 	it("leaves ordinary barcodes and foreign JSON alone", () => {
@@ -52,6 +53,12 @@ describe("orderFromQrPayload", () => {
 			addon_parent_key: null,
 		});
 		expect(order.items[1]).toMatchObject({ addon_item: "TINTA-A", addon_parent_key: "k1" });
-		expect(order.items[2]).toMatchObject({ warehouse: "DKB - CV", is_free_item: 1, rate: 0 });
+		expect(order.items[2]).toMatchObject({
+			warehouse: "DKB - CV",
+			is_free_item: 1,
+			rate: 0,
+			keterangan: "",
+		});
+		expect(order.items[3]).toMatchObject({ item_code: "CAT", keterangan: "warna biru" });
 	});
 });

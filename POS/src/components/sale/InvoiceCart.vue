@@ -1407,12 +1407,24 @@
 							</div>
 
 							<!-- Warehouses the row ships from (saleSplit preview) -->
+							<!-- One sub-row per warehouse the row ships from (saleSplit) -->
 							<div
-								v-if="rowAllocation(item)"
-								class="ps-3 mt-0.5 text-[11px] sm:text-xs text-amber-700 truncate"
-								:title="rowAllocation(item).title"
+								v-for="(part, index) in rowAllocation(item) || []"
+								:key="part.warehouse"
+								class="flex items-center gap-2 ps-3 mt-0.5 text-[11px] sm:text-xs text-amber-700"
+								:title="`${part.warehouse} (${part.abbr})`"
 							>
-								{{ rowAllocation(item).label }}
+								<span class="text-gray-400">{{
+									index === rowAllocation(item).length - 1 ? "└" : "├"
+								}}</span>
+								<span class="truncate flex-1 min-w-0">
+									{{ part.warehouse }}
+									<span v-if="part.isStore" class="text-gray-500">({{ __("toko") }})</span>
+								</span>
+								<span class="flex-shrink-0">{{ part.qty }} {{ item.uom || item.stock_uom }}</span>
+								<span class="flex-shrink-0 w-24 text-end font-semibold">{{
+									formatCurrency(part.amount)
+								}}</span>
 							</div>
 
 							<div
@@ -1712,17 +1724,22 @@ const splitGroups = computed(() => {
 	return groups.length > 1 || groups[0]?.company !== company ? groups : [];
 });
 
+// The row's share per warehouse it ships from, whenever that is not all the
+// session (toko) warehouse - shown as sub-rows; qty and delete stay on the row
 function rowAllocation(item) {
 	const chunks = cartStore.saleSplit.rows.get(saleRowKey(item));
 	if (!chunks?.length) return null;
-	if (chunks.length === 1 && chunks[0].company === cartStore.saleSplit.company) return null;
-	const qty = (value) => (Number.isInteger(value) ? value : Number(value).toFixed(2));
-	// Company abbr is enough when the warehouses belong to different companies
-	const byCompany = new Set(chunks.map((c) => c.company)).size > 1;
-	return {
-		label: chunks.map((c) => `${byCompany ? c.abbr : c.warehouse} ${qty(c.qty)}`).join(" · "),
-		title: chunks.map((c) => `${c.warehouse}: ${qty(c.qty)}`).join("\n"),
-	};
+	const native = cartStore.saleSplit.native;
+	if (chunks.length === 1 && chunks[0].warehouse === native) return null;
+	const total = chunks.reduce((sum, c) => sum + c.qty, 0) || 1;
+	const amount = item.amount || item.rate * item.quantity || 0;
+	return chunks.map((c) => ({
+		warehouse: c.warehouse,
+		abbr: c.abbr,
+		isStore: c.warehouse === native,
+		qty: Number.isInteger(c.qty) ? c.qty : Number(c.qty).toFixed(2),
+		amount: (amount * c.qty) / total,
+	}));
 }
 
 const settingsStore = usePOSSettingsStore(); // Pinia store for POS settings

@@ -24,6 +24,11 @@ function escapeHtml(value) {
 }
 
 export function buildSpgOrderSlipHTML(order, currency) {
+	// Each row says where it is taken from once any stock comes from outside
+	// the toko warehouse (the order splits a line toko first, then the rest)
+	const showWarehouse = (order.items || []).some(
+		(item) => !item.addon_parent_key && item.warehouse !== order.store_warehouse
+	);
 	const itemsHtml = (order.items || [])
 		.map((item) => {
 			if (item.addon_parent_key) {
@@ -38,7 +43,15 @@ export function buildSpgOrderSlipHTML(order, currency) {
 				<div class="row">
 					<span>${item.qty} ${escapeHtml(item.uom)} x ${formatCurrency(item.rate || 0, currency)}</span>
 					<span>${formatCurrency(item.amount || 0, currency)}</span>
-				</div>`;
+				</div>${
+					showWarehouse
+						? `<div class="wh">${__("Ambil di")}: ${escapeHtml(
+								item.warehouse === order.store_warehouse
+									? __("Toko")
+									: item.warehouse
+						  )}</div>`
+						: ""
+				}`;
 		})
 		.join("");
 
@@ -58,6 +71,7 @@ export function buildSpgOrderSlipHTML(order, currency) {
 		.row { display: flex; justify-content: space-between; gap: 4px; }
 		.addon { padding-left: 12px; }
 		.item { margin-top: 4px; }
+		.wh { font-size: 11px; padding-left: 8px; }
 		.sep { border-top: 1px dashed #000; margin: 6px 0; }
 		.total { font-weight: bold; font-size: 14px; }
 		.qr svg { width: 100%; height: auto; }

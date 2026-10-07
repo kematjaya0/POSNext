@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { allocateQty, previewSaleSplit, saleRowKey, splitSubmissionItems } from "../saleSplit";
+import {
+	allocateQty,
+	expectedAllocation,
+	previewSaleSplit,
+	saleRowKey,
+	splitSubmissionItems,
+} from "../saleSplit";
 
 const scope = {
 	native: "UTAMA - MJP",
@@ -157,5 +163,81 @@ describe("splitSubmissionItems", () => {
 			],
 			["BISC", [["A", 5, 10]]],
 		]);
+	});
+});
+
+describe("server allocation and SPG order lines", () => {
+	it("shows the server's allocation instead of the local one", () => {
+		const cart = [row({ quantity: 3 })];
+		const allocation = [
+			[
+				{ warehouse: "UTAMA - BISC", qty: 1 },
+				{ warehouse: "UTAMA - MJP", qty: 2 },
+			],
+		];
+		const split = previewSaleSplit(cart, scope, stockOf, { allocation });
+		expect(split.rows.get(saleRowKey(cart[0])).map((c) => [c.abbr, c.qty])).toEqual([
+			["BISC", 1],
+			["MJP", 2],
+		]);
+		expect(expectedAllocation(cart, split)).toEqual([
+			["A", "UTAMA - BISC", 1],
+			["A", "UTAMA - MJP", 2],
+		]);
+	});
+
+	it("keeps an SPG order line's locked split and bills each part on its own", () => {
+		const chunks = [
+			{ warehouse: "UTAMA - MJP", qty: 2 },
+			{ warehouse: "UTAMA - BISC", qty: 1 },
+		];
+		const cart = [row({ quantity: 3, pos_order_row: true, pos_order_chunks: chunks })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		expect(split.rows.get(saleRowKey(cart[0])).map((c) => [c.abbr, c.qty])).toEqual([
+			["MJP", 2],
+			["BISC", 1],
+		]);
+		const items = [
+			{ item_code: "A", uom: "PCS", qty: 2, warehouse: "UTAMA - MJP" },
+			{ item_code: "A", uom: "PCS", qty: 1, warehouse: "UTAMA - BISC" },
+		];
+		expect(
+			splitSubmissionItems(items, split).map((g) => [g.abbr, g.items.map((i) => i.qty)])
+		).toEqual([
+			["MJP", [2]],
+			["BISC", [1]],
+		]);
+	});
+
+	it("takes the store stock first, then the warehouse picked outside the branch", () => {
+		const cart = [
+			row({ item_code: "B", quantity: 7, warehouse: "LUAR - MJP", warehouse_manual: true }),
+		];
+		const split = previewSaleSplit(cart, scope, stockOf, { storeStockFirst: true });
+		expect(split.rows.get(saleRowKey(cart[0])).map((c) => [c.warehouse, c.qty])).toEqual([
+			["UTAMA - BISC", 5],
+			["LUAR - MJP", 2],
+		]);
+	});
+
+	it("splits a one-warehouse branch when the cashier picked a warehouse outside it", () => {
+		const single = {
+			...scope,
+			companyByWarehouse: { "UTAMA - MJP": scope.companyByWarehouse["UTAMA - MJP"] },
+		};
+		const cart = [row({ quantity: 25, warehouse: "LUAR - MJP", warehouse_manual: true })];
+		const split = previewSaleSplit(cart, single, stockOf, { storeStockFirst: true });
+		expect(split.rows.get(saleRowKey(cart[0])).map((c) => [c.warehouse, c.qty])).toEqual([
+			["UTAMA - MJP", 20],
+			["LUAR - MJP", 5],
+		]);
+	});
+
+	it("sends no allocation when the session sells from one warehouse", () => {
+		const single = {
+			...scope,
+			companyByWarehouse: { "UTAMA - MJP": scope.companyByWarehouse["UTAMA - MJP"] },
+		};
+		expect(expectedAllocation([row()], previewSaleSplit([row()], single, stockOf))).toBeNull();
 	});
 });

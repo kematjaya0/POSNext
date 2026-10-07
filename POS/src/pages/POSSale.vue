@@ -2611,6 +2611,7 @@ async function handleSaveSpgOrder() {
 				coupon_code:
 					cartStore.appliedCoupon?.code || cartStore.appliedCoupon?.name || null,
 				items,
+				expected_allocation: cartStore.getExpectedAllocation(),
 			}),
 		});
 

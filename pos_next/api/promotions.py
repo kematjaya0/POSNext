@@ -14,24 +14,24 @@ def check_promotion_permissions(action="read"):
 	"""
 	Check if user has permissions for promotional scheme operations.
 
+	POS is a read-only catalogue: promotions and coupons are created, changed,
+	toggled and deleted in Desk only, so every write/delete action from these
+	POS APIs is rejected regardless of the user's role.
+
 	Args:
 		action: Type of action - "read", "write", "delete"
 
 	Raises:
 		frappe.PermissionError: If user doesn't have required permissions
 	"""
-	# Check if user has required permissions for Promotional Scheme doctype
 	if action == "read":
 		if not frappe.has_permission("Promotional Scheme", "read"):
 			frappe.throw(_("You don't have permission to view promotions"), frappe.PermissionError)
-	elif action == "write":
-		if not frappe.has_permission("Promotional Scheme", "write"):
-			frappe.throw(
-				_("You don't have permission to create or modify promotions"), frappe.PermissionError
-			)
-	elif action == "delete":
-		if not frappe.has_permission("Promotional Scheme", "delete"):
-			frappe.throw(_("You don't have permission to delete promotions"), frappe.PermissionError)
+		return
+	frappe.throw(
+		_("Promotions and coupons are managed in Desk (backend). POS is view only."),
+		frappe.PermissionError,
+	)
 
 
 PROMOTION_TYPE_ITEM_LEVEL = "Item Level Discount"

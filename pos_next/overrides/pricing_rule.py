@@ -56,6 +56,8 @@ CROSS_CART_MODES = (*MIN_MAX_OPTIONS, ACCUMULATIVE_MODE)
 
 PROMOTION_TYPE_ITEM_LEVEL = "Item Level Discount"
 PROMOTION_TYPE_GIFT_POOL = "Gift Pool"
+PROMOTION_TYPE_GWP = "GWP"
+PROMOTION_TYPE_AUTO = "Auto Discount"
 
 
 def _has_pos_only_column():
@@ -415,6 +417,54 @@ def _sync_gift_pool_scheme_item_groups(doc, item_groups):
 	doc.set("item_groups", [])
 	for group in desired:
 		doc.append("item_groups", {"item_group": group})
+
+
+SLAB_THRESHOLD_FIELDS = ("min_qty", "max_qty", "min_amount", "max_amount")
+
+
+def validate_promotion_type_rules(doc, method=None):
+	"""Promotion type rules for every authoring path (Desk form, API, import).
+
+	The POS editor used to apply these in ``create_promotion`` only; promotions
+	are now entered in Desk, so the scheme itself enforces them.
+	"""
+	if doc.doctype != "Promotional Scheme":
+		return
+	promotion_type = cstr(doc.get("promotion_type") or "").strip()
+	price_slabs = doc.get("price_discount_slabs") or []
+	product_slabs = doc.get("product_discount_slabs") or []
+
+	if promotion_type == PROMOTION_TYPE_ITEM_LEVEL:
+		if product_slabs:
+			frappe.throw(_("Item Level Discount cannot grant free items"), title=_("Item Level Discount"))
+		doc.pos_only = 1
+		accumulative = doc.get("pos_is_accumulative") or any(
+			slab.get("apply_discount_on_price") == ACCUMULATIVE_MODE for slab in price_slabs
+		)
+		if accumulative:
+			return
+		if doc.get("apply_on") != "Item Code":
+			frappe.throw(
+				_("Item Level Discount must use <b>Apply On = Item Code</b>."),
+				title=_("Item Level Discount"),
+			)
+		if not doc.get("items"):
+			frappe.throw(_("Please select at least one item for Item Level Discount"))
+		for slab in price_slabs:
+			if any(flt(slab.get(field)) for field in SLAB_THRESHOLD_FIELDS):
+				frappe.throw(
+					_(
+						"Item Level Discount applies to every unit without conditions: "
+						"leave Min/Max Qty and Min/Max Amount of row {0} at 0."
+					).format(slab.idx),
+					title=_("Item Level Discount"),
+				)
+	elif promotion_type == PROMOTION_TYPE_GWP and price_slabs:
+		frappe.throw(
+			_("GWP only grants free items: remove the price discount rows."), title=_("GWP")
+		)
+	elif promotion_type == PROMOTION_TYPE_AUTO and product_slabs:
+		frappe.throw(_("Auto Discount cannot grant free items"), title=_("Auto Discount"))
 
 
 def validate_gift_pool_scheme(doc, method=None):

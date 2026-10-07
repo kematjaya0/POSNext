@@ -65,6 +65,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		// Miscellaneous
 		input_qty: 0,
 		allow_negative_stock: 0,
+		store_stock_first: 1,
 		// Sales Persons
 		enable_sales_persons: "Disabled",
 		// Security
@@ -170,6 +171,8 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	// Computed - Miscellaneous
 	const inputQty = computed(() => Boolean(settings.value.input_qty));
 	const allowNegativeStock = computed(() => Boolean(settings.value.allow_negative_stock));
+	// The session warehouse must run out before another branch warehouse is picked
+	const storeStockFirst = computed(() => Boolean(settings.value.store_stock_first));
 
 	// Computed - Sales Persons
 	const enableSalesPersons = computed(() => settings.value.enable_sales_persons !== "Disabled");
@@ -285,6 +288,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			allow_change_posting_date: 0,
 			input_qty: 0,
 			allow_negative_stock: 0,
+			store_stock_first: 1,
 			enable_sales_persons: "Disabled",
 			// Security
 			enable_session_lock: 0,
@@ -416,6 +420,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		// Computed - Miscellaneous
 		inputQty,
 		allowNegativeStock,
+		storeStockFirst,
 
 		// Computed - Sales Persons
 		enableSalesPersons,

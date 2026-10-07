@@ -29,10 +29,16 @@
 								<span class="text-gray-500">{{ __("Nomor Draft") }}</span>
 								<span class="font-medium text-gray-900">{{ info.name }}</span>
 							</div>
-							<div v-if="info.max_discount_percent" class="flex justify-between gap-4">
-								<span class="text-gray-500">{{ __("Diskon Terdalam") }}</span>
-								<span class="font-medium text-gray-900">
-									{{ Number(info.max_discount_percent).toFixed(2) }}%
+							<div
+								v-for="line in info.lines || []"
+								:key="line.item_code"
+								class="flex justify-between gap-4"
+							>
+								<span class="text-gray-500 truncate">{{
+									line.item_name || line.item_code
+								}}</span>
+								<span class="font-medium text-gray-900 text-end">
+									{{ approvalReasonLabel(line.reason) }}
 								</span>
 							</div>
 							<div v-if="!rejected && info.pending_role" class="flex justify-between gap-4">
@@ -91,8 +97,8 @@
 
 <script setup>
 /**
- * Ditampilkan ketika penjualan di bawah harga jual ditahan oleh approval
- * berjenjang (lihat nextend/sales_approval).
+ * Ditampilkan ketika penjualan di bawah HPP (atau HPP-nya belum diketahui)
+ * ditahan oleh approval berjenjang (lihat nextend/sales_approval).
  *
  * Kasir TIDAK boleh melihat dialog sukses atau mencetak struk di sini:
  * invoice masih draft, stok belum keluar, dan pembayaran belum tercatat
@@ -100,6 +106,7 @@
  */
 import { computed, ref } from "vue";
 import { Dialog, Button, FeatherIcon, createResource } from "frappe-ui";
+import { approvalReasonLabel } from "@/utils/salesApproval";
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -122,7 +129,18 @@ const headline = computed(() => {
 	if (rejected.value) {
 		return __("Penjualan ini ditolak dan tidak bisa diselesaikan apa adanya.");
 	}
-	return __("Harga jual di bawah harga standar, jadi transaksi perlu persetujuan atasan.");
+	const reasons = new Set((props.info?.lines || []).map((line) => line.reason));
+	if (reasons.size === 1 && reasons.has("hpp_unknown")) {
+		return __(
+			"HPP sebagian barang belum diketahui (stok tanpa lot pembelian), jadi transaksi perlu persetujuan atasan."
+		);
+	}
+	if (reasons.size === 1 && reasons.has("below_hpp")) {
+		return __("Harga jual di bawah HPP, jadi transaksi perlu persetujuan atasan.");
+	}
+	return __(
+		"Ada barang yang dijual di bawah HPP atau HPP-nya belum diketahui, jadi transaksi perlu persetujuan atasan."
+	);
 });
 
 const statusResource = createResource({

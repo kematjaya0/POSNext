@@ -71,8 +71,32 @@ describe("previewSaleSplit", () => {
 		]);
 	});
 
-	it("never moves a row the cashier pinned", () => {
+	it("draws a hand-picked branch warehouse first and spills the rest", () => {
+		// One cart row per item: 2 added from the store, 15 picked from BISC
+		const cart = [row({ quantity: 17, warehouse: "UTAMA - BISC", warehouse_manual: true })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		expect(split.rows.get(saleRowKey(cart[0])).map((c) => [c.abbr, c.qty])).toEqual([
+			["BISC", 10],
+			["MJP", 7],
+		]);
+	});
+
+	it("spills a hand-picked warehouse that has run out", () => {
 		const cart = [row({ item_code: "B", quantity: 2, warehouse_manual: true })];
+		const split = previewSaleSplit(cart, scope, stockOf);
+		expect(split.groups.map((g) => g.abbr)).toEqual(["BISC"]);
+	});
+
+	it("draws the store first when store_stock_first is on", () => {
+		const cart = [row({ quantity: 17, warehouse: "UTAMA - BISC", warehouse_manual: true })];
+		const split = previewSaleSplit(cart, scope, stockOf, { storeStockFirst: true });
+		expect(split.rows.get(saleRowKey(cart[0])).map((c) => [c.abbr, c.qty])).toEqual([
+			["MJP", 17],
+		]);
+	});
+
+	it("never moves a row from an SPG order", () => {
+		const cart = [row({ item_code: "B", quantity: 2, pos_order_row: "R1" })];
 		const split = previewSaleSplit(cart, scope, stockOf);
 		expect(split.groups.map((g) => g.abbr)).toEqual(["MJP"]);
 	});

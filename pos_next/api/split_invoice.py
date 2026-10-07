@@ -8,10 +8,12 @@ A branch (nextend Warehouse Group) can hold warehouses of several companies
 basket and takes one payment; this module decides which warehouse every row
 ships from and bills each company on its own invoice:
 
-* ``plan_sale`` - allocate rows the cashier did not pin to a warehouse (session
+* ``plan_sale`` - allocate every row that ships from the branch (session
   warehouse first, then the branch's other warehouses, oldest restock first),
   then group rows per company. A row that needs two warehouses becomes one
-  invoice row per warehouse.
+  invoice row per warehouse. A branch warehouse the cashier picked by hand is
+  drawn first, unless POS Settings.store_stock_first says the session
+  warehouse must run out first.
 * ``submit_split_sale`` - create every invoice in the request's transaction,
   share the basket discount and the payment between them, and submit them all
   (or keep them all as drafts when a ``pos_next_split_hold`` hook says so).
@@ -94,13 +96,18 @@ def plan_sale(invoice):
 
 
 def _allocate_rows(items, profile):
-	"""Spread rows the cashier did not pin over the branch warehouses, in place.
+	"""Spread branch rows over the branch warehouses, in place.
 
 	Each row fills from the session warehouse first and spills to the branch's
 	other warehouses (oldest restock first). Rows of the same item draw from one
 	running balance, so a free-item row cannot reuse stock its paid row took.
 	Whatever the branch cannot cover stays on the first warehouse, where the
 	usual stock validation reports it.
+
+	The cart keeps one row per item + UOM, so a hand-picked branch warehouse
+	cannot pin the whole row - it would carry qty the cashier added from the
+	session warehouse too. It only moves to the front of the order, and not
+	even that while store_stock_first is on.
 	"""
 	scope = get_session_scope(profile)
 	branch = scope["branch"]
@@ -116,6 +123,7 @@ def _allocate_rows(items, profile):
 	stock = get_session_stock(item_codes, profile)
 	order_by_item = {code: _warehouse_order(code, branch, scope["native"]) for code in item_codes}
 	whole_uoms = set(frappe.get_all("UOM", filters={"must_be_whole_number": 1}, pluck="name"))
+	store_first = store_stock_first(profile.name)
 
 	remaining = {code: dict((stock.get(code) or {}).get("stock_by_warehouse") or {}) for code in item_codes}
 	allocated = []
@@ -123,14 +131,28 @@ def _allocate_rows(items, profile):
 		if id(row) not in candidate_ids:
 			allocated.append(row)
 			continue
-		allocated.extend(
-			_split_row(row, order_by_item[row["item_code"]], remaining[row["item_code"]], whole_uoms)
-		)
+		order = order_by_item[row["item_code"]]
+		picked = row.get("warehouse")
+		if cint(row.get("warehouse_manual")) and not store_first and picked in order:
+			order = [picked] + [warehouse for warehouse in order if warehouse != picked]
+		allocated.extend(_split_row(row, order, remaining[row["item_code"]], whole_uoms))
 	items[:] = allocated
 
 
+def store_stock_first(pos_profile):
+	"""POS Settings.store_stock_first: the session warehouse must run out
+	before another branch warehouse may supply a row. On unless a POS
+	Settings record turns it off."""
+	if not pos_profile:
+		return True
+	value = frappe.db.get_value(
+		"POS Settings", {"pos_profile": pos_profile, "enabled": 1}, "store_stock_first"
+	)
+	return value is None or bool(cint(value))
+
+
 def _is_auto_allocated(row, branch):
-	if cint(row.get("warehouse_manual")) or row.get("custom_addon_parent_key"):
+	if row.get("custom_addon_parent_key"):
 		return False
 	if row.get("batch_no") or row.get("serial_no"):
 		return False

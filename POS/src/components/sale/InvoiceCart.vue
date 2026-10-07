@@ -1503,8 +1503,7 @@
 						</p>
 						<p class="mt-0.5 text-xs text-amber-800">
 							{{
-								__("Diskon terdalam {0}% — butuh persetujuan sampai {1}.", [
-									Number(approvalPreview.max_discount_percent).toFixed(2),
+								__("Butuh persetujuan sampai {0}.", [
 									approvalPreview.required_role,
 								])
 							}}
@@ -1515,8 +1514,8 @@
 								:key="line.item_code"
 								class="text-xs text-amber-700"
 							>
-								<span class="font-medium">{{ line.item_code }}</span>
-								· {{ Number(line.discount_percent).toFixed(2) }}%
+								<span class="font-medium">{{ line.item_name || line.item_code }}</span>
+								· {{ approvalReasonLabel(line.reason) }}
 								· {{ line.tier_role }}
 							</li>
 						</ul>
@@ -1651,6 +1650,7 @@ import { offlineWorker } from "@/utils/offline/workerClient";
 import { logger } from "@/utils/logger";
 import { getAvailableAddons } from "@/utils/itemAddons";
 import { saleRowKey } from "@/utils/saleSplit";
+import { approvalReasonLabel } from "@/utils/salesApproval";
 import { FeatherIcon } from "frappe-ui";
 
 const log = logger.create("InvoiceCart");
@@ -1760,8 +1760,8 @@ const props = defineProps({
  * ============================================================================
  * SALES APPROVAL PRE-CHECK (nextend)
  * ============================================================================
- * A sale priced below the item's selling price is held for approval at submit
- * time. Without this pre-check the cashier only discovers that AFTER taking
+ * A sale priced below HPP (or whose HPP is unknown) is held for approval at
+ * submit time. Without this pre-check the cashier only discovers that AFTER taking
  * the customer's money, which is the worst possible moment to find out.
  *
  * Purely advisory: the authoritative decision is still made server-side when
@@ -1798,6 +1798,14 @@ async function runApprovalCheck() {
 			discount_amount: item.discount_amount ?? 0,
 			pricing_rules: item.pricing_rules ?? null,
 			uom: item.uom ?? null,
+			conversion_factor: item.conversion_factor ?? null,
+			item_name: item.item_name ?? null,
+			// The server allocates the rows over the branch warehouses as submit
+			// will, and judges each company's rows against its own lots.
+			warehouse: item.warehouse ?? null,
+			warehouse_manual: item.warehouse_manual ? 1 : 0,
+			batch_no: item.batch_no ?? null,
+			serial_no: item.serial_no ?? null,
 		}));
 
 		const result = await approvalCheckResource.submit({
@@ -1824,7 +1832,12 @@ watch(
 	// would re-query the server on every unrelated keystroke in the cart.
 	() =>
 		(props.items || [])
-			.map((i) => `${i.item_code}:${i.quantity ?? i.qty}:${i.rate}:${i.price_list_rate}`)
+			.map(
+				(i) =>
+					`${i.item_code}:${i.uom}:${i.quantity ?? i.qty}:${i.rate}:${
+						i.price_list_rate
+					}:${i.warehouse}:${i.warehouse_manual ? 1 : 0}`
+			)
 			.join("|") + `#${props.discountAmount || 0}`,
 	scheduleApprovalCheck,
 	{ immediate: true }

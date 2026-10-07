@@ -1517,6 +1517,24 @@ def update_invoice(data):
 		# Normalize pricing_rules before document creation
 		standardize_pricing_rules(data.get("items"))
 
+		# A single-company branch saves its basket as a draft first and never
+		# reaches the allocation in submit_invoice, so spread it over the
+		# branch warehouses here. A basket that needs several companies keeps
+		# its rows as sent: submit_invoice plans it again before billing.
+		if (
+			doctype == "Sales Invoice"
+			and pos_profile
+			and data.get("items")
+			and not cint(data.get("is_return"))
+			and not data.get("custom_pos_order")
+			and not frappe.flags.get("pos_next_sale_planned")
+		):
+			from pos_next.api.split_invoice import plan_sale
+
+			plan = plan_sale(data)
+			if not plan["split"] and plan["groups"]:
+				data["items"] = plan["groups"][0]["items"]
+
 		# Create or update invoice
 		if data.get("name"):
 			invoice_doc = frappe.get_doc(doctype, data.get("name"))
@@ -2174,6 +2192,9 @@ def submit_invoice(invoice=None, data=None):
 			from pos_next.api.split_invoice import plan_sale, submit_split_sale
 
 			plan = plan_sale(invoice)
+			# The drafts below carry this allocation; planning them again in
+			# update_invoice would lose the cashier's hand-picked warehouse.
+			frappe.flags.pos_next_sale_planned = True
 			if plan["split"]:
 				result = submit_split_sale(invoice, data, plan)
 				if result.get("requires_approval"):
@@ -2499,6 +2520,7 @@ def submit_invoice(invoice=None, data=None):
 		raise
 
 	finally:
+		frappe.flags.pos_next_sale_planned = None
 		# Cleanup sync record if invoice was not successfully submitted
 		if sync_record_name and not invoice_submitted:
 			_cleanup_failed_sync(sync_record_name)

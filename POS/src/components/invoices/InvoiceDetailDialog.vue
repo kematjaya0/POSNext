@@ -465,7 +465,7 @@
 				<Button variant="subtle" @click="show = false">
 					{{ __("Close") }}
 				</Button>
-				<Button @click="handlePrint">
+				<Button v-if="allowPrint" @click="handlePrint">
 					<template #prefix>
 						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path
@@ -502,6 +502,11 @@ const props = defineProps({
 	currency: {
 		type: String,
 		default: DEFAULT_CURRENCY,
+	},
+	/** SPG views their invoices without reprinting receipts */
+	allowPrint: {
+		type: Boolean,
+		default: true,
 	},
 });
 

@@ -94,7 +94,11 @@
 										}}
 									</span>
 								</div>
+								<span v-if="lockedSalesPerson" class="text-xs text-purple-600">
+									{{ __("dari pesanan SPG") }}
+								</span>
 								<button
+									v-else
 									@click="clearSalesPersons"
 									class="text-purple-500 hover:text-purple-700 p-1 rounded hover:bg-purple-100"
 									:title="__('Change sales person')"
@@ -2068,6 +2072,11 @@ const { showWarning, showInfo } = useToast();
 
 const props = defineProps({
 	modelValue: Boolean,
+	/** Sales Person of a loaded SPG order (nextend POS Order): fixed, not changeable */
+	lockedSalesPerson: {
+		type: String,
+		default: null,
+	},
 	grandTotal: {
 		type: Number,
 		default: 0,
@@ -2554,23 +2563,14 @@ const totalSalesAllocation = computed(() => {
 	return selectedSalesPersons.value.reduce((sum, p) => sum + (p.allocated_percentage || 0), 0);
 });
 
-// Computed: Validation - sales person is required when enabled and online
-const isSalesPersonValid = computed(() => {
-	// If sales persons feature is disabled, always valid
-	if (!settingsStore.enableSalesPersons) {
-		return true;
-	}
-	// Skip validation when offline — sales persons can't be fetched,
-	// don't block the sale. Team data is omitted from offline invoices.
-	if (props.isOffline) {
-		return true;
-	}
-	// At least one sales person must be selected
-	return selectedSalesPersons.value.length > 0;
-});
+// nextend: a sales person is optional (a direct sale may have none); an SPG
+// order is always credited to its SPG - locked below, enforced by the server.
+// Upstream required one whenever the feature was enabled and online.
+const isSalesPersonValid = computed(() => true);
 
 // Helper functions for sales persons
 function addSalesPerson(person) {
+	if (props.lockedSalesPerson) return;
 	// For Single mode, replace the existing selection with 100%
 	if (settingsStore.isSingleSalesPerson) {
 		selectedSalesPersons.value = [
@@ -2601,6 +2601,7 @@ function addSalesPerson(person) {
 }
 
 function removeSalesPerson(personName) {
+	if (props.lockedSalesPerson) return;
 	const index = selectedSalesPersons.value.findIndex((p) => p.sales_person === personName);
 	if (index > -1) {
 		selectedSalesPersons.value.splice(index, 1);
@@ -2612,6 +2613,7 @@ function removeSalesPerson(personName) {
 }
 
 function clearSalesPersons() {
+	if (props.lockedSalesPerson) return;
 	selectedSalesPersons.value = [];
 	salesPersonSearch.value = "";
 }
@@ -3047,6 +3049,14 @@ watch(show, (newVal) => {
 			customerCreditResource.fetch();
 		}
 		selectedSalesPersons.value = [];
+		if (props.lockedSalesPerson) {
+			const locked = salesPersons.value.find((p) => p.name === props.lockedSalesPerson);
+			selectedSalesPersons.value.push({
+				sales_person: props.lockedSalesPerson,
+				sales_person_name: locked?.sales_person_name || props.lockedSalesPerson,
+				allocated_percentage: 100,
+			});
+		}
 		salesPersonSearch.value = "";
 		applyWriteOff.value = false; // Reset write-off state
 		// Set default delivery date to today for Sales Orders

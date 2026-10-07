@@ -39,6 +39,18 @@
 							class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
 						>
 							<span>{{ __("Pesanan Saya") }}</span>
+							<span
+								v-if="spgOrdersCount > 0"
+								class="ms-auto text-xs bg-teal-600 text-white px-1.5 py-0.5 rounded-full"
+							>
+								{{ spgOrdersCount }}
+							</span>
+						</button>
+						<button
+							@click="showSpgInvoicesDialog = true"
+							class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
+						>
+							<span>{{ __("Invoice History") }}</span>
 						</button>
 						<button
 							@click="showSpgShiftDialog = true"
@@ -424,6 +436,7 @@
 								:customer="cartStore.customer"
 								:spg-mode="shiftStore.isSpgMode"
 								:spg-queue-count="spgQueueCount"
+								:spg-orders-count="spgOrdersCount"
 								:subtotal="cartStore.subtotal"
 								:tax-amount="cartStore.totalTax"
 								:discount-amount="cartStore.totalDiscount"
@@ -459,7 +472,8 @@
 								@view-shift="uiStore.showOpenShiftDialog = true"
 								@show-drafts="uiStore.showDraftDialog = true"
 								@show-spg-queue="openSpgQueueDialog"
-								@show-history="uiStore.showHistoryDialog = true"
+								@show-spg-orders="showSpgOrdersDialog = true"
+								@show-history="openHistoryDialog"
 								@show-return="uiStore.showReturnDialog = true"
 								@close-shift="handleCloseShift()"
 								@show-shift-history="navigateToShiftHistory"
@@ -583,6 +597,7 @@
 				:target-doctype="cartStore.targetDoctype"
 				:is-submitting="cartStore.isSubmitting"
 				:applied-offer-count="cartStore.appliedOffers.length"
+				:locked-sales-person="cartStore.posOrderSalesPerson"
 				@payment-completed="handlePaymentCompleted"
 				@update-additional-discount="handleAdditionalDiscountUpdate"
 				@show-offers="uiStore.showOffersDialog = true"
@@ -603,8 +618,16 @@
 				@shift-selected="handleShiftOpened"
 			/>
 			<SpgOrdersDialog
+				ref="spgOrdersDialogRef"
 				v-model="showSpgOrdersDialog"
 				:currency="shiftStore.profileCurrency"
+				@orders-changed="setSpgOrders"
+				@edit-order="handleEditSpgOrder"
+			/>
+			<SpgInvoicesDialog
+				v-model="showSpgInvoicesDialog"
+				:currency="shiftStore.profileCurrency"
+				@view-invoice="handleViewInvoice"
 			/>
 			<SpgQueueDialog
 				ref="spgQueueDialogRef"
@@ -811,6 +834,7 @@
 				:invoice-name="selectedInvoiceForView"
 				:pos-profile="shiftStore.profileName"
 				:currency="shiftStore.profileCurrency"
+				:allow-print="!shiftStore.isSpgMode"
 				@print-invoice="handlePrintInvoice"
 			/>
 
@@ -1132,6 +1156,7 @@ let _posInitPromise = null;
 <script setup>
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
+import SpgInvoicesDialog from "@/components/sale/SpgInvoicesDialog.vue";
 import SpgOrdersDialog from "@/components/sale/SpgOrdersDialog.vue";
 import OrderQrCameraDialog from "@/components/sale/OrderQrCameraDialog.vue";
 import SpgQueueDialog from "@/components/sale/SpgQueueDialog.vue";
@@ -1468,7 +1493,45 @@ const profileWarehouses = computed(() => {
 const canAccessShiftActions = computed(() => shiftStore.hasOpenShift && !shiftStore.isSpgMode);
 const showSpgShiftDialog = ref(false);
 const showSpgOrdersDialog = ref(false);
+const spgOrdersDialogRef = ref(null);
+// SPG: invoices credited to their Sales Person (instead of the cashier's history)
+const showSpgInvoicesDialog = ref(false);
 const savingSpgOrder = ref(false);
+
+// SPG: own Pending orders waiting at the cashier (badge on "Pesanan Saya")
+const spgOrdersCount = ref(0);
+let spgOrderGroups = new Set();
+let spgOrdersRefreshTimer = null;
+
+function setSpgOrders(orders) {
+	spgOrdersCount.value = orders.length;
+	spgOrderGroups = new Set(orders.map((order) => order.warehouse_group));
+}
+
+async function refreshSpgOrders() {
+	if (!shiftStore.isSpgMode || offlineStore.isOffline) {
+		return;
+	}
+	if (showSpgOrdersDialog.value) {
+		// The open dialog reloads its list and reports the orders back
+		spgOrdersDialogRef.value?.loadOrders();
+		return;
+	}
+	try {
+		setSpgOrders((await call("nextend.pos_order.get_my_orders")) || []);
+	} catch (error) {
+		log.warn("Failed to load SPG orders", error);
+	}
+}
+
+watch(
+	() => [shiftStore.isSpgMode && shiftStore.currentShift?.name, offlineStore.isOffline],
+	([shiftName, isOffline]) => {
+		setSpgOrders([]);
+		if (shiftName && !isOffline) refreshSpgOrders();
+	},
+	{ immediate: true }
+);
 
 // Cashier: queue of Pending SPG orders in this shift's Warehouse Group
 const showSpgQueueDialog = ref(false);
@@ -1507,6 +1570,14 @@ async function refreshSpgQueue() {
 
 /** nextend publishes this whenever an order is created, cancelled, paid or expired. */
 function handleSpgQueueEvent(data) {
+	if (shiftStore.isSpgMode) {
+		// Own new orders refresh locally after saving; other events (paid,
+		// cancelled by the cashier, expired) only matter for groups we have orders in
+		if (!spgOrderGroups.has(data?.warehouse_group)) return;
+		clearTimeout(spgOrdersRefreshTimer);
+		spgOrdersRefreshTimer = setTimeout(refreshSpgOrders, 500);
+		return;
+	}
 	if (spgQueueGroup && data?.warehouse_group !== spgQueueGroup) {
 		return;
 	}
@@ -1531,6 +1602,7 @@ onMounted(() => {
 onUnmounted(() => {
 	window.frappe?.realtime?.off("nextend_pos_order_queue", handleSpgQueueEvent);
 	clearTimeout(spgQueueRefreshTimer);
+	clearTimeout(spgOrdersRefreshTimer);
 });
 
 /** Desk link only for users with the Nexus POS Manager role (from bootstrap API). */
@@ -2426,6 +2498,53 @@ async function handlePosOrderScanned(code) {
 	showSuccess(__("Pesanan {0} dimuat", [order.name]));
 }
 
+/**
+ * SPG: change an own Pending order. The cashier cannot edit SPG orders, so the
+ * order is cancelled (stock lock released, its slip/QR no longer valid) and
+ * its items go back into the cart; saving makes a new order with a new slip.
+ */
+async function handleEditSpgOrder(name) {
+	if (offlineStore.isOffline) {
+		showWarning(__("Pesanan hanya bisa diubah saat online"));
+		return;
+	}
+	if (!cartStore.isEmpty) {
+		showWarning(__("Simpan atau kosongkan keranjang sebelum mengubah pesanan {0}", [name]));
+		return;
+	}
+	if (
+		!window.confirm(
+			__(
+				"Pesanan {0} akan dibatalkan dan isinya dimuat ke keranjang. Struk lamanya tidak berlaku lagi - simpan ulang untuk membuat pesanan baru dan cetak struk baru. Lanjutkan?",
+				[name]
+			)
+		)
+	) {
+		return;
+	}
+
+	try {
+		const order = await call("nextend.pos_order.get_order", { name });
+		if (order.status !== "Pending") {
+			showError(__("Pesanan {0} sudah {1}", [order.name, __(order.status)]));
+			refreshSpgOrders();
+			return;
+		}
+		await call("nextend.pos_order.cancel_order", { name });
+
+		cartStore.loadPosOrder(order, { editable: true });
+		if (order.customer) {
+			cartStore.setCustomer({ name: order.customer, customer_name: order.customer });
+		}
+		previousCartHash = computeCartHash();
+		showSpgOrdersDialog.value = false;
+		refreshSpgOrders();
+		showSuccess(__("Pesanan {0} dibatalkan, silakan ubah lalu simpan ulang", [name]));
+	} catch (error) {
+		showError(error?.messages?.[0] || error?.message || __("Gagal membuka pesanan"));
+	}
+}
+
 /** Cashier picked an order from the SPG queue - same path as a scanned slip. */
 async function handleLoadQueueOrder(name) {
 	await handlePosOrderScanned({ name });
@@ -2499,6 +2618,7 @@ async function handleSaveSpgOrder() {
 		previousCartHash = "";
 		await cartStore.setDefaultCustomer();
 		showSuccess(__("Pesanan {0} tersimpan", [order.name]));
+		refreshSpgOrders();
 
 		try {
 			printSpgOrderSlip(order, shiftStore.profileCurrency, printWindow);
@@ -2950,6 +3070,10 @@ function openDraftDialog() {
 }
 
 function openHistoryDialog() {
+	if (shiftStore.isSpgMode) {
+		showSpgInvoicesDialog.value = true;
+		return;
+	}
 	if (!canAccessShiftActions.value) {
 		return;
 	}

@@ -351,7 +351,7 @@ export function buildReceiptHTML(invoiceData) {
 					${
 						invoiceData.footer
 							? ""
-							: `<div style="font-size: 10px;">Powered by <a href="https://nexus.brainwise.me" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">BrainWise</a></div>`
+							: `<div style="font-size: 10px;">©2026</div>`
 					}
 				</div>
 			</div>`;

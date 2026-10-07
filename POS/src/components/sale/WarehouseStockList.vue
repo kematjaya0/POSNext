@@ -128,6 +128,9 @@
  * Self-hiding: renders nothing when the cashier has no more than one
  * candidate warehouse (no nextend Warehouse Group) - falls back to today's
  * single-warehouse behavior.
+ *
+ * Only rows with stock > 0 are listed; the selected row stays visible even
+ * at 0 so the cashier can see where the cart row currently comes from.
  */
 import { call } from "@/utils/apiWrapper";
 import { pickSessionWarehouse } from "@/utils/stockValidator";
@@ -150,12 +153,18 @@ const loading = ref(false);
 const pickedByHand = ref(false);
 watch(pickedByHand, (value) => emit("picked-by-hand", value), { immediate: true });
 
-const showList = computed(() => warehouses.value.length > 1);
+const visibleRows = computed(() =>
+	warehouses.value.filter(
+		(w) => Number(w.stock_qty) > 0 || w.warehouse === props.modelValue
+	)
+);
+
+const showList = computed(() => warehouses.value.length > 1 && visibleRows.value.length > 0);
 
 const sections = computed(() =>
 	[
-		{ key: "branch", rows: warehouses.value.filter((w) => w.tier !== "outside") },
-		{ key: "outside", rows: warehouses.value.filter((w) => w.tier === "outside") },
+		{ key: "branch", rows: visibleRows.value.filter((w) => w.tier !== "outside") },
+		{ key: "outside", rows: visibleRows.value.filter((w) => w.tier === "outside") },
 	].filter((section) => section.rows.length)
 );
 

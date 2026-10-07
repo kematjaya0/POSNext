@@ -93,7 +93,8 @@
 						type="text"
 						:placeholder="searchPlaceholder"
 						:class="[
-							'w-full text-[11px] sm:text-sm border rounded-lg px-2 sm:px-3 py-2 ps-7 sm:ps-10 pe-16 sm:pe-24 focus:outline-none transition-all',
+							'w-full text-[11px] sm:text-sm border rounded-lg px-2 sm:px-3 py-2 ps-7 sm:ps-10 focus:outline-none transition-all',
+							showOrderCamera ? 'pe-24 sm:pe-32' : 'pe-16 sm:pe-24',
 							autoAddEnabled
 								? 'border-blue-400 bg-blue-50 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
 								: scannerEnabled
@@ -104,6 +105,35 @@
 					/>
 					<!-- Barcode Scan Icon and Auto-Add Toggle -->
 					<div class="absolute inset-y-0 end-0 pe-1 sm:pe-2 flex items-center gap-0.5">
+						<!-- Camera scan of an SPG order slip QR (nextend POS Order) -->
+						<button
+							v-if="showOrderCamera"
+							type="button"
+							@click="emit('open-order-camera')"
+							class="p-1 sm:p-1.5 rounded transition-[background-color] duration-75 touch-manipulation hover:bg-gray-100 active:bg-gray-200 text-teal-600"
+							:title="__('Scan QR pesanan SPG dengan kamera')"
+							:aria-label="__('Scan QR pesanan SPG dengan kamera')"
+						>
+							<svg
+								class="w-3.5 h-3.5 sm:w-4 sm:h-4"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+								/>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+								/>
+							</svg>
+						</button>
 						<button
 							@click="toggleBarcodeScanner"
 							:class="[
@@ -1069,9 +1099,14 @@ const props = defineProps({
 		type: String,
 		default: DEFAULT_CURRENCY,
 	},
+	/** Cashier: show the camera button for scanning SPG order slips */
+	showOrderCamera: {
+		type: Boolean,
+		default: false,
+	},
 });
 
-const emit = defineEmits(["item-selected", "pos-order-scanned"]);
+const emit = defineEmits(["item-selected", "pos-order-scanned", "open-order-camera"]);
 
 // Use composables
 const { getStockStatus } = useStock();

@@ -246,6 +246,19 @@
 						</div>
 					</div>
 
+					<!-- Keterangan (optional note per cart row) -->
+					<div>
+						<label class="block text-sm font-medium text-gray-700 mb-2 text-start">{{
+							__("Keterangan")
+						}}</label>
+						<textarea
+							v-model="keterangan"
+							rows="2"
+							:placeholder="__('Opsional')"
+							class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+						></textarea>
+					</div>
+
 					<!-- Price Summary -->
 					<div class="bg-blue-50 rounded-xl p-4 flex items-center justify-between">
 						<div>
@@ -414,6 +427,7 @@ const selectedWarehouse = ref("");
 const selectedWarehouseStock = ref(null);
 const warehouseManual = ref(false);
 const quantity = ref(1);
+const keterangan = ref("");
 const selectedAttributes = ref({}); // For variant attribute selection
 const quantityInput = ref(null);
 const cartStore = usePOSCartStore();
@@ -626,6 +640,7 @@ async function loadOptions() {
 	selectedWarehouse.value = props.item.warehouse || "";
 	selectedWarehouseStock.value = null;
 	quantity.value = props.item.resolved_qty || 1;
+	keterangan.value = "";
 	selectedAttributes.value = {}; // Reset attribute selection
 
 	if (props.mode === "variant") {
@@ -737,6 +752,7 @@ function confirm() {
 		const option = { ...selectedOption.value };
 		if (props.mode === "uom") {
 			option.quantity = quantity.value;
+			option.keterangan = keterangan.value.trim();
 			if (selectedWarehouse.value) {
 				option.warehouse = selectedWarehouse.value;
 				option.warehouse_manual = warehouseManual.value;

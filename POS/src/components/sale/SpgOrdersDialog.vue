@@ -60,7 +60,7 @@
 import { useToast } from "@/composables/useToast";
 import { call } from "@/utils/apiWrapper";
 import { DEFAULT_CURRENCY, formatCurrency } from "@/utils/currency";
-import { printSpgOrderSlip } from "@/utils/printSpgOrder";
+import { openSpgOrderSlipWindow, printSpgOrderSlip } from "@/utils/printSpgOrder";
 import { Button, Dialog } from "frappe-ui";
 import { computed, ref, watch } from "vue";
 
@@ -102,9 +102,13 @@ async function loadOrders() {
 
 async function reprint(name) {
 	busy.value = `${name}:print`;
+	// Opened before awaiting the server, or the browser blocks it as a popup
+	const printWindow = openSpgOrderSlipWindow();
 	try {
-		printSpgOrderSlip(await call("nextend.pos_order.get_order", { name }));
+		const order = await call("nextend.pos_order.get_order", { name });
+		printSpgOrderSlip(order, props.currency, printWindow);
 	} catch (error) {
+		printWindow?.close();
 		showError(errorMessage(error, __("Gagal mencetak pesanan")));
 	} finally {
 		busy.value = null;

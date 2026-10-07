@@ -229,6 +229,13 @@ export function useInvoice() {
 	});
 
 	// Actions
+	/** Join a note typed when re-adding an item onto the row's existing note. */
+	function mergeKeterangan(current, incoming) {
+		const note = (incoming || "").trim();
+		if (!note || current === note) return current || "";
+		return current ? `${current}; ${note}` : note;
+	}
+
 	function addItem(item, quantity = 1) {
 		const itemUom = item.uom || item.stock_uom;
 		const existingItem = invoiceItems.value.find(
@@ -260,6 +267,7 @@ export function useInvoice() {
 			} else {
 				existingItem.quantity += quantity;
 			}
+			existingItem.keterangan = mergeKeterangan(existingItem.keterangan, item.keterangan);
 			recalculateItem(existingItem);
 
 			// Update cache incrementally (new values - old values)
@@ -286,6 +294,7 @@ export function useInvoice() {
 				stock_uom: item.stock_uom,
 				conversion_factor: item.conversion_factor || 1,
 				warehouse: item.warehouse,
+				keterangan: mergeKeterangan("", item.keterangan),
 				actual_batch_qty: item.actual_batch_qty || 0,
 				has_batch_no: item.has_batch_no || 0,
 				has_serial_no: item.has_serial_no || 0,
@@ -984,6 +993,7 @@ export function useInvoice() {
 			is_free_item: item.is_free_item || 0,
 			// Picked by the cashier: the server must not re-allocate this row
 			warehouse_manual: item.warehouse_manual ? 1 : 0,
+			custom_keterangan: item.keterangan || "",
 		});
 
 		const out = [];
@@ -1479,6 +1489,7 @@ export function useInvoice() {
 					item_uoms: [],
 					pricing_rules: row.pricing_rules || "",
 					is_free_item: row.is_free_item || 0,
+					keterangan: row.keterangan || "",
 					is_resolved_barcode: true,
 					pos_order_row: true,
 				};

@@ -365,6 +365,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	}
 
 	async function loadDefaultCustomer() {
+		const shiftStore = usePOSShiftStore();
 		const profileCustomer =
 			shiftStore.currentProfile?.customer || shiftStore.profileCustomer || null;
 		await setDefaultCustomer(profileCustomer);
@@ -2322,6 +2323,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			if (updates.price_list_rate !== undefined)
 				cartItem.price_list_rate = updates.price_list_rate;
 			if (updates.serial_no !== undefined) cartItem.serial_no = updates.serial_no;
+			if (updates.keterangan !== undefined) cartItem.keterangan = updates.keterangan;
 			// Track manual rate edits for audit purposes
 			if (updates.is_rate_manually_edited !== undefined)
 				cartItem.is_rate_manually_edited = updates.is_rate_manually_edited;

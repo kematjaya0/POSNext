@@ -6,6 +6,11 @@
  *
  * Printed through the browser print dialog - on Android a Bluetooth thermal
  * printer is reached through a print service app (e.g. RawBT).
+ *
+ * The window must be opened inside the click handler, before awaiting the
+ * server: a window.open after an await is treated as an unrequested popup and
+ * blocked. Open it with openSpgOrderSlipWindow() first, fill it once the order
+ * arrives.
  */
 
 import { formatCurrency } from "@/utils/currency";
@@ -18,21 +23,21 @@ function escapeHtml(value) {
 		.replace(/"/g, "&quot;");
 }
 
-export function buildSpgOrderSlipHTML(order) {
+export function buildSpgOrderSlipHTML(order, currency) {
 	const itemsHtml = (order.items || [])
 		.map((item) => {
 			if (item.addon_parent_key) {
 				return `
 				<div class="row addon">
 					<span>+ ${escapeHtml(item.item_name || item.addon_item)}</span>
-					<span>${formatCurrency(item.amount || 0)}</span>
+					<span>${formatCurrency(item.amount || 0, currency)}</span>
 				</div>`;
 			}
 			return `
 				<div class="item">${escapeHtml(item.item_name || item.item_code)}</div>
 				<div class="row">
-					<span>${item.qty} ${escapeHtml(item.uom)} x ${formatCurrency(item.rate || 0)}</span>
-					<span>${formatCurrency(item.amount || 0)}</span>
+					<span>${item.qty} ${escapeHtml(item.uom)} x ${formatCurrency(item.rate || 0, currency)}</span>
+					<span>${formatCurrency(item.amount || 0, currency)}</span>
 				</div>`;
 		})
 		.join("");
@@ -76,12 +81,14 @@ export function buildSpgOrderSlipHTML(order) {
 	${
 		discount
 			? `<div class="row"><span>${__("Diskon")}</span><span>-${formatCurrency(
-					discount
+					discount,
+					currency
 			  )}</span></div>`
 			: ""
 	}
 	<div class="row total"><span>${__("TOTAL")}</span><span>${formatCurrency(
-		order.grand_total || 0
+		order.grand_total || 0,
+		currency
 	)}</span></div>
 	<div class="sep"></div>
 	<div class="qr">${order.qr_svg || ""}</div>
@@ -90,14 +97,22 @@ export function buildSpgOrderSlipHTML(order) {
 </html>`;
 }
 
-export function printSpgOrderSlip(order) {
+/** Open the slip window from a click handler; null when the browser blocks it. */
+export function openSpgOrderSlipWindow() {
 	const printWindow = window.open("", "_blank", "width=350,height=600");
-	if (!printWindow) {
+	printWindow?.document.write(
+		`<p style="font-family: monospace">${__("Menyiapkan struk...")}</p>`
+	);
+	return printWindow;
+}
+
+export function printSpgOrderSlip(order, currency, printWindow = openSpgOrderSlipWindow()) {
+	if (!printWindow || printWindow.closed) {
 		throw new Error(__("Popup blocked — check your browser settings."));
 	}
-	printWindow.document.write(buildSpgOrderSlipHTML(order));
+	printWindow.document.open();
+	printWindow.document.write(buildSpgOrderSlipHTML(order, currency));
 	printWindow.document.close();
-	printWindow.onload = () => {
-		setTimeout(() => printWindow.print(), 250);
-	};
+	// The slip has no external resources; onload is unreliable on a reused window
+	setTimeout(() => printWindow.print(), 250);
 }

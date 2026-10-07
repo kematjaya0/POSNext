@@ -1519,8 +1519,8 @@ def update_invoice(data):
 
 		# A single-company branch saves its basket as a draft first and never
 		# reaches the allocation in submit_invoice, so spread it over the
-		# branch warehouses here. A basket that needs several companies keeps
-		# its rows as sent: submit_invoice plans it again before billing.
+		# branch warehouses here. A basket that needs several companies cannot
+		# be one draft - the cart sends those to submit_invoice directly.
 		if (
 			doctype == "Sales Invoice"
 			and pos_profile
@@ -1532,7 +1532,14 @@ def update_invoice(data):
 			from pos_next.api.split_invoice import plan_sale
 
 			plan = plan_sale(data)
-			if not plan["split"] and plan["groups"]:
+			if plan["split"]:
+				frappe.throw(
+					_(
+						"Penjualan ini ditagih ke beberapa company dan tidak bisa disimpan "
+						"sebagai satu draft. Muat ulang POS lalu ulangi."
+					)
+				)
+			if plan["groups"]:
 				data["items"] = plan["groups"][0]["items"]
 
 		# Create or update invoice

@@ -314,6 +314,15 @@
 													)
 												"
 											/>
+											<CheckboxField
+												v-model="settings.store_stock_first"
+												:label="__('Habiskan Stok Toko Terlebih Dahulu')"
+												:description="
+													__(
+														'Jika cabang punya beberapa gudang, stok gudang toko wajib habis dulu sebelum mengambil dari gudang lain. Jika tidak dicentang, kasir tetap bisa memilih gudang lain dengan peringatan.'
+													)
+												"
+											/>
 											<div class="mt-3 p-3 bg-blue-100 rounded-md">
 												<div class="flex items-start gap-2">
 													<svg
@@ -1196,6 +1205,7 @@ const settings = ref({
 	allow_partial_payment: 0,
 	silent_print: 0,
 	allow_negative_stock: 0,
+	store_stock_first: 1,
 	tax_inclusive: 0,
 });
 

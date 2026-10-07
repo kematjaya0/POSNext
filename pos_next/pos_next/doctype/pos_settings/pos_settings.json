@@ -69,6 +69,7 @@
   "section_break_misc",
   "input_qty",
   "allow_negative_stock",
+  "store_stock_first",
   "section_break_security",
   "enable_session_lock",
   "session_lock_timeout",
@@ -516,6 +517,13 @@
    "label": "Allow Negative Stock"
   },
   {
+   "default": "1",
+   "description": "Saat cabang punya beberapa gudang, stok gudang toko (gudang POS Profile) wajib habis dulu sebelum mengambil dari gudang lain. Jika tidak dicentang, kasir tetap boleh memilih gudang lain dan hanya mendapat peringatan.",
+   "fieldname": "store_stock_first",
+   "fieldtype": "Check",
+   "label": "Habiskan Stok Toko Terlebih Dahulu"
+  },
+  {
    "collapsible": 1,
    "fieldname": "section_break_security",
    "fieldtype": "Section Break",
@@ -550,7 +558,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-03 15:54:09.903964",
+ "modified": "2026-10-07 06:25:34.042139",
  "modified_by": "Administrator",
  "module": "POS Next",
  "name": "POS Settings",

@@ -81,6 +81,17 @@
 			</div>
 		</template>
 		<p
+			v-if="storeStockNotice"
+			:class="[
+				'text-xs rounded-lg p-2 mt-2 border',
+				storeStockNotice.blocking
+					? 'text-gray-700 bg-gray-50 border-gray-200'
+					: 'text-amber-800 bg-amber-50 border-amber-200',
+			]"
+		>
+			{{ storeStockNotice.message }}
+		</p>
+		<p
 			v-if="selectedCrossCompany"
 			class="text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded-lg p-2 mt-2 flex items-center gap-1.5"
 		>
@@ -131,8 +142,14 @@
  *
  * Only rows with stock > 0 are listed; the selected row stays visible even
  * at 0 so the cashier can see where the cart row currently comes from.
+ *
+ * Store stock first: while the session (native) warehouse can cover `qty`,
+ * another branch warehouse is locked when POS Settings.store_stock_first is
+ * on, and only warned about when it is off. The server draws the session
+ * warehouse first either way when the setting is on (split_invoice.py).
  */
 import { call } from "@/utils/apiWrapper";
+import { usePOSSettingsStore } from "@/stores/posSettings";
 import { pickSessionWarehouse } from "@/utils/stockValidator";
 import { computed, ref, watch } from "vue";
 
@@ -147,6 +164,8 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:modelValue", "warehouse-stock", "picked-by-hand"]);
+
+const settingsStore = usePOSSettingsStore();
 
 const warehouses = ref([]);
 const loading = ref(false);
@@ -176,11 +195,63 @@ const branchStock = computed(() =>
 
 const outsideAllowed = computed(() => branchStock.value < props.qty);
 
-const isDisabled = (row) => row.tier === "outside" && !outsideAllowed.value;
+const nativeStock = computed(() =>
+	warehouses.value
+		.filter((w) => w.tier === "native")
+		.reduce((sum, w) => sum + (Number(w.stock_qty) || 0), 0)
+);
+
+// The session warehouse alone covers what the cart row needs
+const storeCovers = computed(() => nativeStock.value > 0 && nativeStock.value >= props.qty);
+
+const isStoreLocked = (row) =>
+	row.tier === "branch" && settingsStore.storeStockFirst && storeCovers.value;
+
+const isDisabled = (row) =>
+	(row.tier === "outside" && !outsideAllowed.value) || isStoreLocked(row);
 
 const selectedRow = computed(
 	() => warehouses.value.find((w) => w.warehouse === props.modelValue) || null
 );
+
+const storeStockNotice = computed(() => {
+	const nativeName = warehouses.value.find((w) => w.tier === "native")?.warehouse_name;
+	if (!nativeName || nativeStock.value <= 0) return null;
+	const stock = `${formatQty(nativeStock.value)}${props.uom ? " " + props.uom : ""}`;
+
+	if (settingsStore.storeStockFirst) {
+		if (storeCovers.value && sections.value.some((s) => s.rows.some(isStoreLocked))) {
+			return {
+				blocking: true,
+				message: __(
+					"Stok {0} masih cukup ({1}) - wajib dihabiskan dulu sebelum mengambil dari gudang lain.",
+					[nativeName, stock]
+				),
+			};
+		}
+		if (selectedRow.value && selectedRow.value.tier !== "native") {
+			return {
+				blocking: false,
+				message: __("Stok {0} ({1}) dipakai dulu, sisanya diambil dari gudang lain.", [
+					nativeName,
+					stock,
+				]),
+			};
+		}
+		return null;
+	}
+
+	if (pickedByHand.value && selectedRow.value?.tier === "branch") {
+		return {
+			blocking: false,
+			message: __(
+				"Stok {0} masih ada ({1}). Sebaiknya habiskan stok toko dulu sebelum mengambil dari gudang lain.",
+				[nativeName, stock]
+			),
+		};
+	}
+	return null;
+});
 
 const selectedCrossCompany = computed(() =>
 	selectedRow.value && !selectedRow.value.is_native_company ? selectedRow.value : null
@@ -196,12 +267,17 @@ function autoSelect() {
 
 watch(() => props.qty, autoSelect);
 
-// Qty went back within branch stock: an outside pick is no longer allowed
-watch(outsideAllowed, (allowed) => {
-	if (!allowed && selectedRow.value?.tier === "outside" && warehouses.value.length) {
-		emit("update:modelValue", warehouses.value[0].warehouse);
+// Qty went back within branch stock: an outside pick is no longer allowed.
+// Likewise a branch pick once the session warehouse covers the qty again
+// under store_stock_first.
+watch(
+	() => selectedRow.value && isDisabled(selectedRow.value),
+	(disabled) => {
+		if (disabled && warehouses.value.length) {
+			emit("update:modelValue", warehouses.value[0].warehouse);
+		}
 	}
-});
+);
 
 function formatQty(qty) {
 	const num = Number(qty) || 0;

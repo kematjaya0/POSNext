@@ -4,8 +4,11 @@
 """Pure helpers of pos_next.api.split_invoice (no database needed)."""
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from pos_next.api.split_invoice import _allocate_payments, _prorate, _split_row
+from pos_next.api import split_invoice
+from pos_next.api.split_invoice import _allocate_payments, _allocate_rows, _prorate, _split_row
 
 
 class TestProrate(unittest.TestCase):
@@ -81,6 +84,50 @@ class TestSplitRow(unittest.TestCase):
 	def test_add_on_key_stays_on_first_chunk_only(self):
 		rows = _split_row(self.row(custom_addon_key="k1"), ["W1", "W2"], {"W1": 20, "W2": 10}, set())
 		self.assertEqual([r.get("custom_addon_key") for r in rows], ["k1", None])
+
+
+class TestAllocateRows(unittest.TestCase):
+	"""The cart keeps one row per item + UOM: 2 sabun added from the store and
+	2 picked by hand from the other warehouse arrive as one row of 4."""
+
+	def allocate(self, rows, store_first=False, stock=None):
+		stock = stock or {"TOKO": 2, "GUDANG": 10}
+		with (
+			patch.object(
+				split_invoice,
+				"get_session_scope",
+				return_value={"branch": ["TOKO", "GUDANG"], "native": "TOKO"},
+			),
+			patch.object(
+				split_invoice, "get_session_stock", return_value={"SABUN": {"stock_by_warehouse": stock}}
+			),
+			patch.object(
+				split_invoice, "_warehouse_order", side_effect=lambda code, branch, native: ["TOKO", "GUDANG"]
+			),
+			patch.object(split_invoice, "store_stock_first", return_value=store_first),
+			patch.object(split_invoice.frappe, "get_all", return_value=[]),
+		):
+			_allocate_rows(rows, SimpleNamespace(name="Kasir"))
+		return [(r["warehouse"], r["qty"]) for r in rows]
+
+	def row(self, **overrides):
+		return {"item_code": "SABUN", "qty": 4, "uom": "PCS", "conversion_factor": 1, **overrides}
+
+	def test_hand_picked_branch_warehouse_no_longer_pins_the_whole_row(self):
+		rows = [self.row(warehouse="GUDANG", warehouse_manual=1)]
+		self.assertEqual(self.allocate(rows, stock={"TOKO": 2, "GUDANG": 2}), [("GUDANG", 2), ("TOKO", 2)])
+
+	def test_hand_picked_branch_warehouse_is_drawn_first(self):
+		rows = [self.row(warehouse="GUDANG", warehouse_manual=1)]
+		self.assertEqual(self.allocate(rows), [("GUDANG", 4)])
+
+	def test_store_stock_first_empties_the_store_before_the_pick(self):
+		rows = [self.row(warehouse="GUDANG", warehouse_manual=1)]
+		self.assertEqual(self.allocate(rows, store_first=True), [("TOKO", 2), ("GUDANG", 2)])
+
+	def test_hand_picked_warehouse_outside_the_branch_is_kept(self):
+		rows = [self.row(warehouse="LUAR", warehouse_manual=1)]
+		self.assertEqual(self.allocate(rows), [("LUAR", 4)])
 
 
 if __name__ == "__main__":

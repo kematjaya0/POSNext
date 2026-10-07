@@ -203,7 +203,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	// Where each row ships from and how many invoices the sale becomes; the
 	// server makes the final call on submit (pos_next/api/split_invoice.py).
 	const saleSplit = computed(() =>
-		previewSaleSplit(invoiceItems.value, stockStore.scope, stockStore.getStockByWarehouse)
+		previewSaleSplit(invoiceItems.value, stockStore.scope, stockStore.getStockByWarehouse, {
+			storeStockFirst: settingsStore.storeStockFirst,
+		})
 	);
 
 	// The session sells stock of several companies: submit goes straight to the

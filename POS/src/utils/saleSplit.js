@@ -26,17 +26,24 @@ export function saleRowKey(row) {
  * @param {SaleScope} scope
  */
 export function isAutoAllocated(row, scope) {
-	if (row.warehouse_manual || row.pos_order_row) return false;
+	if (row.pos_order_row) return false;
 	if (row.batch_no || row.serial_no) return false;
 	return !row.warehouse || row.warehouse in (scope.companyByWarehouse || {});
 }
 
-function warehouseOrder(stockByWarehouse, scope) {
+/**
+ * Session warehouse first, then the rest by stock. A branch warehouse the
+ * cashier picked by hand goes in front, unless the session warehouse must run
+ * out first (POS Settings.store_stock_first) - mirrors _allocate_rows.
+ */
+function warehouseOrder(stockByWarehouse, scope, picked = null) {
 	const branch = Object.keys(scope.companyByWarehouse || {});
 	const others = branch
 		.filter((wh) => wh !== scope.native)
 		.sort((a, b) => (Number(stockByWarehouse[b]) || 0) - (Number(stockByWarehouse[a]) || 0));
-	return branch.includes(scope.native) ? [scope.native, ...others] : others;
+	const order = branch.includes(scope.native) ? [scope.native, ...others] : others;
+	if (!picked || !order.includes(picked)) return order;
+	return [picked, ...order.filter((wh) => wh !== picked)];
 }
 
 /**
@@ -68,13 +75,14 @@ export function allocateQty(qty, factor, warehouses, remaining) {
  * @param {Array<Object>} rows - posCart invoiceItems
  * @param {SaleScope} scope
  * @param {(itemCode: string) => Object<string, number>} stockOf - stock UOM per branch warehouse
+ * @param {{storeStockFirst?: boolean}} [options] - POS Settings.store_stock_first
  * @returns {{
  *   rows: Map<string, Array<{warehouse: string, qty: number, company: string, abbr: string}>>,
  *   groups: Array<{company: string, abbr: string, amount: number}>,
  *   company: string
  * }} `company` is the session's own (POS Profile) company
  */
-export function previewSaleSplit(rows, scope, stockOf) {
+export function previewSaleSplit(rows, scope, stockOf, { storeStockFirst = false } = {}) {
 	const companyByWarehouse = scope?.companyByWarehouse || {};
 	const result = { rows: new Map(), groups: [], company: scope?.company || null };
 	if (!rows?.length || Object.keys(companyByWarehouse).length < 2) return result;
@@ -92,7 +100,11 @@ export function previewSaleSplit(rows, scope, stockOf) {
 			chunks = allocateQty(
 				qty,
 				factor,
-				warehouseOrder(remaining[row.item_code], scope),
+				warehouseOrder(
+					remaining[row.item_code],
+					scope,
+					row.warehouse_manual && !storeStockFirst ? row.warehouse : null
+				),
 				remaining[row.item_code]
 			);
 		} else {

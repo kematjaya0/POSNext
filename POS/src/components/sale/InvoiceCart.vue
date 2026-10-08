@@ -739,6 +739,7 @@
 				<div class="grid grid-cols-2 gap-2 sm:gap-2.5 w-full max-w-lg">
 					<!-- View Shift -->
 					<button
+						v-if="!spgMode"
 						type="button"
 						@click="$emit('view-shift')"
 						class="flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 active:bg-blue-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
@@ -774,6 +775,7 @@
 
 					<!-- Draft Invoices -->
 					<button
+						v-if="!spgMode"
 						type="button"
 						@click="$emit('show-drafts')"
 						class="flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-purple-300 hover:bg-purple-50 active:bg-purple-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
@@ -837,6 +839,42 @@
 						}}</span>
 					</button>
 
+					<!-- SPG: own Pending orders waiting at the cashier (nextend POS Order) -->
+					<button
+						v-else
+						type="button"
+						@click="$emit('show-spg-orders')"
+						class="relative flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-teal-300 hover:bg-teal-50 active:bg-teal-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
+						:title="__('Lihat pesanan yang menunggu diproses kasir')"
+					>
+						<span
+							v-if="spgOrdersCount > 0"
+							class="absolute top-1.5 end-1.5 min-w-[1.25rem] text-[10px] font-semibold bg-teal-600 text-white px-1.5 py-0.5 rounded-full"
+						>
+							{{ spgOrdersCount }}
+						</span>
+						<div
+							class="w-9 h-9 sm:w-10 sm:h-10 bg-teal-50 rounded-full flex items-center justify-center mb-2 group-hover:bg-teal-100 transition-colors"
+						>
+							<svg
+								class="w-5 h-5 text-teal-600"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"
+								/>
+							</svg>
+						</div>
+						<span class="text-[11px] sm:text-xs font-semibold text-gray-700">{{
+							__("Pesanan Saya")
+						}}</span>
+					</button>
+
 					<!-- Invoice History -->
 					<button
 						type="button"
@@ -868,6 +906,7 @@
 
 					<!-- Return Invoice -->
 					<button
+						v-if="!spgMode"
 						type="button"
 						@click="$emit('show-return')"
 						class="flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-red-300 hover:bg-red-50 active:bg-red-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
@@ -897,6 +936,7 @@
 
 					<!-- Close Shift -->
 					<button
+						v-if="!spgMode"
 						type="button"
 						@click="$emit('close-shift')"
 						class="flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-orange-300 hover:bg-orange-50 active:bg-orange-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
@@ -955,6 +995,7 @@
 
 					<!-- Shift History -->
 					<button
+						v-if="!spgMode"
 						type="button"
 						@click="$emit('show-shift-history')"
 						class="flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-indigo-300 hover:bg-indigo-50 active:bg-indigo-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
@@ -1724,6 +1765,11 @@ const props = defineProps({
 		type: Number,
 		default: 0,
 	},
+	/** SPG: own Pending orders waiting at the cashier (badge on "Pesanan Saya") */
+	spgOrdersCount: {
+		type: Number,
+		default: 0,
+	},
 	subtotal: {
 		type: Number,
 		default: 0,
@@ -1872,6 +1918,7 @@ const emit = defineEmits([
 	"view-shift", // () - View current shift details
 	"show-drafts", // () - Show draft/held orders
 	"show-spg-queue", // () - Show Pending SPG orders of this branch
+	"show-spg-orders", // () - SPG: show own Pending orders
 	"show-history", // () - Show invoice history
 	"show-return", // () - Open return invoice dialog
 	"close-shift", // () - Close current shift

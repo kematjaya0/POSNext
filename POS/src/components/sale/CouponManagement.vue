@@ -53,6 +53,12 @@
 					</template>
 					{{ __("Create New Coupon") }}
 				</Button>
+				<Button v-if="deskAccess" @click="openInDesk()" variant="solid" class="w-full">
+					<template #prefix>
+						<FeatherIcon name="external-link" class="w-4 h-4" />
+					</template>
+					{{ __("Kelola di Desk") }}
+				</Button>
 				<Button @click="loadCoupons" variant="outline" class="w-full" :loading="loading">
 					<template #prefix>
 						<FeatherIcon name="refresh-cw" class="w-4 h-4" />
@@ -167,7 +173,7 @@
 					<p class="text-sm text-gray-600 mb-6">
 						{{
 							__(
-								"Choose a coupon from the list to view and edit, or create a new one to get started"
+								"Pilih kupon dari daftar untuk melihat detailnya. Kupon dibuat dan diubah di Desk (backend)."
 							)
 						}}
 					</p>
@@ -178,7 +184,7 @@
 						{{ __("Create New Coupon") }}
 					</Button>
 					<p v-else class="text-sm text-amber-600">
-						{{ __("You don't have permission to create coupons") }}
+						{{ __("Kupon hanya bisa dibuat di Desk (backend)") }}
 					</p>
 				</div>
 			</div>
@@ -212,7 +218,7 @@
 								{{
 									isCreating
 										? __("Fill in the details to create a new coupon")
-										: __("View and update coupon information")
+										: __("Hanya lihat - ubah kupon di Desk")
 								}}
 							</p>
 						</div>
@@ -250,8 +256,18 @@
 								v-if="!isCreating && (permissions.write || permissions.delete)"
 								class="w-px h-6 bg-gray-200"
 							></div>
+							<Button
+								v-if="deskAccess && selectedCoupon?.name"
+								@click="openInDesk(selectedCoupon.name)"
+								variant="outline"
+							>
+								<template #prefix>
+									<FeatherIcon name="external-link" class="w-4 h-4" />
+								</template>
+								{{ __("Buka di Desk") }}
+							</Button>
 							<Button @click="handleCancel" variant="ghost">
-								{{ __("Cancel") }}
+								{{ __("Close") }}
 							</Button>
 							<Button
 								v-if="isCreating ? permissions.create : permissions.write"
@@ -271,7 +287,8 @@
 					</div>
 
 					<!-- Form Content -->
-					<div class="flex flex-col gap-6">
+					<!-- Read-only in POS: promotions & coupons are entered in Desk -->
+					<fieldset disabled class="flex flex-col gap-6 min-w-0">
 						<!-- Basic Information Card -->
 						<Card>
 							<div class="p-5">
@@ -749,7 +766,7 @@
 								</div>
 							</div>
 						</Card>
-					</div>
+					</fieldset>
 				</div>
 			</div>
 		</div>
@@ -837,7 +854,13 @@ const props = defineProps({
 			delete: true,
 		}),
 	},
+	/** User may edit coupons in Desk: show shortcuts there (POS itself is read-only) */
+	deskAccess: Boolean,
 });
+
+function openInDesk(name = null) {
+	window.open(`/app/pos-coupon${name ? `/${encodeURIComponent(name)}` : ""}`, "_blank");
+}
 
 const emit = defineEmits(["coupon-saved", "refresh-requested"]);
 

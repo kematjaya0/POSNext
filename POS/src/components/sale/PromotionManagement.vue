@@ -129,6 +129,17 @@
 										</template>
 										{{ __("Create New Promotion") }}
 									</Button>
+									<Button
+										v-if="deskAccess"
+										@click="openInDesk()"
+										variant="solid"
+										class="w-full"
+									>
+										<template #prefix>
+											<FeatherIcon name="external-link" class="w-4 h-4" />
+										</template>
+										{{ __("Kelola di Desk") }}
+									</Button>
 									<!-- Permission Warning -->
 									<div
 										v-else
@@ -303,7 +314,7 @@
 										<p class="text-sm text-gray-600 mb-6">
 											{{
 												__(
-													"Choose a promotion from the list to view and edit, or create a new one to get started"
+													"Pilih promosi dari daftar untuk melihat detailnya. Promosi dibuat dan diubah di Desk (backend)."
 												)
 											}}
 										</p>
@@ -318,11 +329,7 @@
 											{{ __("Create New Promotion") }}
 										</Button>
 										<p v-else class="text-sm text-amber-600">
-											{{
-												__(
-													"You don't have permission to create promotions"
-												)
-											}}
+											{{ __("Promosi hanya bisa dibuat di Desk (backend)") }}
 										</p>
 									</div>
 								</div>
@@ -342,7 +349,7 @@
 														{{
 															isCreating
 																? __("Create New Promotion")
-																: __("Edit Promotion")
+																: __("Promotion Details")
 														}}
 													</h3>
 													<Badge
@@ -388,16 +395,15 @@
 													<span v-else>
 														{{
 															__(
-																"Update the promotion details below"
+																"Hanya lihat - ubah promosi di Desk"
 															)
 														}}
 													</span>
 												</p>
 											</div>
 											<div class="flex items-center gap-2">
-												<!-- Show info badge for read-only Pricing Rules -->
+												<!-- POS is read-only: promotions are edited in Desk -->
 												<div
-													v-if="isPricingRule"
 													class="flex items-center gap-2 px-3 py-1 bg-blue-50 rounded-lg"
 												>
 													<FeatherIcon
@@ -412,6 +418,26 @@
 													>
 												</div>
 
+												<Button
+													v-if="deskAccess && selectedPromotion?.name"
+													@click="
+														openInDesk(
+															isPricingRule
+																? 'pricing-rule'
+																: 'promotional-scheme',
+															selectedPromotion.name
+														)
+													"
+													variant="outline"
+												>
+													<template #prefix>
+														<FeatherIcon
+															name="external-link"
+															class="w-4 h-4"
+														/>
+													</template>
+													{{ __("Buka di Desk") }}
+												</Button>
 												<Button
 													v-if="
 														!isCreating &&
@@ -468,9 +494,7 @@
 													class="w-px h-6 bg-gray-200"
 												></div>
 												<Button @click="handleCancel" variant="ghost">
-													{{
-														isPricingRule ? __("Close") : __("Cancel")
-													}}
+													{{ __("Close") }}
 												</Button>
 												<Button
 													v-if="
@@ -495,7 +519,8 @@
 										</div>
 
 										<!-- Form Content -->
-										<div class="flex flex-col gap-6">
+										<!-- Read-only in POS: promotions & coupons are entered in Desk -->
+										<fieldset disabled class="flex flex-col gap-6 min-w-0">
 											<!-- Basic Information Card -->
 											<Card>
 												<div class="p-5">
@@ -1224,7 +1249,7 @@
 													</div>
 												</div>
 											</Card>
-										</div>
+										</fieldset>
 									</div>
 								</div>
 							</div>
@@ -1236,6 +1261,7 @@
 							:company="company"
 							:currency="currency"
 							:permissions="permissions"
+							:desk-access="deskAccess"
 							@coupon-saved="handleCouponSaved"
 						/>
 					</div>
@@ -1319,7 +1345,7 @@ import TranslatedHTML from "../common/TranslatedHTML.vue";
 const { showSuccess, showError, showWarning } = useToast();
 
 // Permission checks
-const { canCreatePromotion, canEditPromotion, canDeletePromotion } = usePOSPermissions();
+const { canEditPromotion } = usePOSPermissions();
 const permissions = ref({
 	create: true,
 	write: true,
@@ -1788,27 +1814,24 @@ onMounted(() => {
 	checkPermissions();
 });
 
-// Check user permissions
+// POS is a read-only catalogue: promotions and coupons are entered in Desk
+// (the server rejects writes from POS too). Users allowed to edit them in Desk
+// get a shortcut there instead.
+const deskAccess = ref(false);
+
 async function checkPermissions() {
+	permissions.value = { create: false, write: false, delete: false };
 	try {
-		const [create, write, del] = await Promise.all([
-			canCreatePromotion(),
-			canEditPromotion(),
-			canDeletePromotion(),
-		]);
-		permissions.value = {
-			create,
-			write,
-			delete: del,
-		};
+		deskAccess.value = await canEditPromotion();
 	} catch (error) {
 		console.error("Error checking promotion permissions:", error);
-		permissions.value = {
-			create: false,
-			write: false,
-			delete: false,
-		};
+		deskAccess.value = false;
 	}
+}
+
+function openInDesk(doctype = null, name = null) {
+	const route = doctype || (activeTab.value === "coupons" ? "pos-coupon" : "promotional-scheme");
+	window.open(`/app/${route}${name ? `/${encodeURIComponent(name)}` : ""}`, "_blank");
 }
 
 // Utility: Parse error messages from server response

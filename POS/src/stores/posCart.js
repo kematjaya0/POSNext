@@ -114,6 +114,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		formatItemsForSubmission,
 		setItemAddons,
 		posOrder,
+		posOrderSalesPerson,
 		loadPosOrder,
 	} = useInvoice();
 
@@ -2912,6 +2913,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		formatItemsForSubmission,
 		setItemAddons,
 		posOrder,
+		posOrderSalesPerson,
 		loadPosOrder,
 
 		// Sales Order feature

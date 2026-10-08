@@ -37,6 +37,8 @@ export function useInvoice() {
 	const couponCode = ref(null);
 	/** nextend POS Order (SPG order) this cart pays for - its rows are read-only */
 	const posOrder = ref(null);
+	// Sales Person of the loaded SPG order - the invoice is credited to them
+	const posOrderSalesPerson = ref(null);
 	const taxRules = ref([]); // Tax rules from POS Profile
 	const taxInclusive = ref(false); // Tax inclusive setting from POS Settings
 
@@ -1449,9 +1451,16 @@ export function useInvoice() {
 	 * already reserved for this order (`pos_order_row` skips stock checks).
 	 * Add on rows go back onto their base row as `item.addons`.
 	 *
+	 * With `editable` the SPG reopens their own order to change it (the order
+	 * itself is cancelled by the caller; saving makes a new one): rows stay
+	 * editable, promo free items and pricing-rule discounts are dropped so the
+	 * offer engine recomputes them, and the cart is not tied to the order.
+	 *
 	 * @param {Object} order - { name, discount_amount, coupon_code, items: [POS Order Item] }
+	 * @param {Object} [options]
+	 * @param {boolean} [options.editable=false]
 	 */
-	function loadPosOrder(order) {
+	function loadPosOrder(order, { editable = false } = {}) {
 		const addonsByKey = {};
 		for (const row of order.items) {
 			if (row.addon_parent_key) {
@@ -1465,17 +1474,22 @@ export function useInvoice() {
 		}
 
 		invoiceItems.value = order.items
-			.filter((row) => !row.addon_parent_key)
+			.filter((row) => !row.addon_parent_key && !(editable && row.is_free_item))
 			.map((row) => {
 				const priceListRate = Number.parseFloat(row.price_list_rate) || row.rate || 0;
+				const dropDiscount = editable && Boolean(row.pricing_rules);
 				const item = {
 					item_code: row.item_code,
 					item_name: row.item_name || row.item_code,
 					rate: priceListRate,
 					price_list_rate: priceListRate,
 					quantity: Number.parseFloat(row.qty) || 0,
-					discount_percentage: Number.parseFloat(row.discount_percentage) || 0,
-					discount_amount: Number.parseFloat(row.discount_amount) || 0,
+					discount_percentage: dropDiscount
+						? 0
+						: Number.parseFloat(row.discount_percentage) || 0,
+					discount_amount: dropDiscount
+						? 0
+						: Number.parseFloat(row.discount_amount) || 0,
 					tax_amount: 0,
 					amount: 0,
 					uom: row.uom,
@@ -1487,12 +1501,14 @@ export function useInvoice() {
 					has_batch_no: row.batch_no ? 1 : 0,
 					has_serial_no: row.serial_no ? 1 : 0,
 					item_uoms: [],
-					pricing_rules: row.pricing_rules || "",
+					pricing_rules: editable ? "" : row.pricing_rules || "",
 					is_free_item: row.is_free_item || 0,
 					keterangan: row.keterangan || "",
-					is_resolved_barcode: true,
-					pos_order_row: true,
 				};
+				if (!editable) {
+					item.is_resolved_barcode = true;
+					item.pos_order_row = true;
+				}
 				if (row.addon_key && addonsByKey[row.addon_key]) {
 					item.addon_key = row.addon_key;
 					item.addons = addonsByKey[row.addon_key];
@@ -1502,8 +1518,9 @@ export function useInvoice() {
 			});
 
 		additionalDiscount.value = Number.parseFloat(order.discount_amount) || 0;
-		couponCode.value = order.coupon_code || null;
-		posOrder.value = order.name;
+		couponCode.value = editable ? null : order.coupon_code || null;
+		posOrder.value = editable ? null : order.name;
+		posOrderSalesPerson.value = editable ? null : order.sales_person || null;
 		rebuildIncrementalCache();
 	}
 
@@ -1513,6 +1530,7 @@ export function useInvoice() {
 		additionalDiscount.value = 0;
 		couponCode.value = null;
 		posOrder.value = null;
+		posOrderSalesPerson.value = null;
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0;
@@ -1541,6 +1559,7 @@ export function useInvoice() {
 		additionalDiscount.value = 0;
 		couponCode.value = null;
 		posOrder.value = null;
+		posOrderSalesPerson.value = null;
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0;
@@ -1617,6 +1636,7 @@ export function useInvoice() {
 		additionalDiscount,
 		couponCode,
 		posOrder,
+		posOrderSalesPerson,
 		taxRules,
 		taxInclusive,
 		isSubmitting,

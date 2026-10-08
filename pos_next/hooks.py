@@ -187,6 +187,7 @@ doc_events = {
 			"pos_next.overrides.pricing_rule.enforce_cross_cart_pricing_config",
 			"pos_next.overrides.pricing_rule.validate_unique_promotion_type_per_item",
 			"pos_next.overrides.pricing_rule.validate_gift_pool_scheme",
+			"pos_next.overrides.pricing_rule.validate_promotion_type_rules",
 		],
 		"on_update": "pos_next.overrides.pricing_rule.sync_promotion_fields_to_pricing_rules",
 	},

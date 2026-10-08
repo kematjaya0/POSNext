@@ -34,6 +34,13 @@
 							<div class="flex items-center gap-1 shrink-0">
 								<Button
 									size="sm"
+									:disabled="Boolean(busy)"
+									@click="emit('edit-order', order.name)"
+								>
+									{{ __("Ubah") }}
+								</Button>
+								<Button
+									size="sm"
 									:loading="busy === order.name + ':print'"
 									@click="reprint(order.name)"
 								>
@@ -72,7 +79,7 @@ const props = defineProps({
 	},
 });
 
-const emit = defineEmits(["update:modelValue"]);
+const emit = defineEmits(["update:modelValue", "edit-order", "orders-changed"]);
 
 const { showSuccess, showError } = useToast();
 
@@ -93,6 +100,7 @@ async function loadOrders() {
 	loading.value = true;
 	try {
 		orders.value = (await call("nextend.pos_order.get_my_orders")) || [];
+		emit("orders-changed", orders.value);
 	} catch (error) {
 		showError(errorMessage(error, __("Gagal memuat pesanan")));
 	} finally {
@@ -134,4 +142,6 @@ async function cancel(name) {
 watch(show, (value) => {
 	if (value) loadOrders();
 });
+
+defineExpose({ loadOrders });
 </script>

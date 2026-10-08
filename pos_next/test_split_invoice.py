@@ -8,7 +8,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from pos_next.api import split_invoice
-from pos_next.api.split_invoice import _allocate_payments, _allocate_rows, _prorate, _split_row
+from pos_next.api.split_invoice import (
+	_allocate_payments,
+	_allocate_rows,
+	_prorate,
+	_split_row,
+	check_allocation,
+)
 
 
 class TestProrate(unittest.TestCase):
@@ -128,6 +134,35 @@ class TestAllocateRows(unittest.TestCase):
 	def test_hand_picked_warehouse_outside_the_branch_is_kept(self):
 		rows = [self.row(warehouse="LUAR", warehouse_manual=1)]
 		self.assertEqual(self.allocate(rows), [("LUAR", 4)])
+
+	def test_hand_picked_warehouse_outside_the_branch_supplies_what_the_store_cannot(self):
+		rows = [self.row(qty=3, warehouse="LUAR", warehouse_manual=1)]
+		self.assertEqual(
+			self.allocate(rows, store_first=True, stock={"TOKO": 2, "GUDANG": 0}),
+			[("TOKO", 2), ("LUAR", 1)],
+		)
+
+	def test_add_on_ships_from_its_base_rows_first_chunk(self):
+		rows = [
+			self.row(warehouse="GUDANG", custom_addon_key="k"),
+			{"item_code": "TINTA", "qty": 1, "warehouse": "GUDANG", "custom_addon_parent_key": "k"},
+		]
+		self.assertEqual(self.allocate(rows, store_first=True), [("TOKO", 2), ("GUDANG", 2), ("TOKO", 1)])
+
+
+class TestCheckAllocation(unittest.TestCase):
+	rows = (
+		{"item_code": "SABUN", "qty": 2, "conversion_factor": 1, "warehouse": "TOKO"},
+		{"item_code": "SABUN", "qty": 1, "conversion_factor": 1, "warehouse": "GUDANG"},
+		{"item_code": "TINTA", "qty": 1, "warehouse": "TOKO", "custom_addon_parent_key": "k"},
+	)
+
+	def test_same_split_as_the_cart_passes(self):
+		check_allocation(self.rows, [["SABUN", "TOKO", 2], ["SABUN", "GUDANG", 1]])
+
+	def test_split_the_cart_did_not_show_is_refused(self):
+		with self.assertRaises(split_invoice.frappe.ValidationError):
+			check_allocation(self.rows, [["SABUN", "GUDANG", 3]])
 
 
 if __name__ == "__main__":

@@ -1,11 +1,12 @@
 /**
  * Preview of how a basket splits across the branch's warehouses and companies.
  *
- * The server decides the final allocation when the sale is submitted
- * (pos_next/api/split_invoice.py); this mirrors it closely enough for the cart
- * to show where each row ships from and how many invoices the sale becomes.
- * The one difference: the server orders the non-session warehouses by oldest
- * restock, the preview by most stock.
+ * The server decides the allocation (pos_next/api/split_invoice.py). Online
+ * the cart shows the server's own answer (preview_allocation) and the sale is
+ * refused if it changed by the time it is paid; the local allocation here
+ * only fills the gap until that answer arrives, or while offline. It differs
+ * from the server in one way: the server orders the non-session warehouses by
+ * oldest restock, this by most stock.
  */
 
 /**
@@ -28,22 +29,41 @@ export function saleRowKey(row) {
 export function isAutoAllocated(row, scope) {
 	if (row.pos_order_row) return false;
 	if (row.batch_no || row.serial_no) return false;
-	return !row.warehouse || row.warehouse in (scope.companyByWarehouse || {});
+	// A warehouse outside the branch only comes in when the cashier picked it
+	return (
+		!row.warehouse ||
+		row.warehouse in (scope.companyByWarehouse || {}) ||
+		Boolean(row.warehouse_manual)
+	);
 }
 
 /**
- * Session warehouse first, then the rest by stock. A branch warehouse the
- * cashier picked by hand goes in front, unless the session warehouse must run
- * out first (POS Settings.store_stock_first) - mirrors _allocate_rows.
+ * Whether the cart can ship from more than one warehouse: the branch has
+ * several, or the cashier picked one outside it - mirrors _allocate_rows.
  */
-function warehouseOrder(stockByWarehouse, scope, picked = null) {
+export function needsAllocation(rows, scope) {
+	const branch = scope?.companyByWarehouse || {};
+	if (!rows?.length) return false;
+	return (
+		Object.keys(branch).length > 1 ||
+		rows.some((row) => row.warehouse_manual && row.warehouse && !(row.warehouse in branch))
+	);
+}
+
+/**
+ * Session warehouse first, then the rest by stock. A warehouse the cashier
+ * picked by hand goes in front when `pickedFirst` (store_stock_first off); one
+ * outside the branch otherwise joins the end - mirrors _allocate_rows.
+ */
+function warehouseOrder(stockByWarehouse, scope, picked = null, pickedFirst = false) {
 	const branch = Object.keys(scope.companyByWarehouse || {});
 	const others = branch
 		.filter((wh) => wh !== scope.native)
 		.sort((a, b) => (Number(stockByWarehouse[b]) || 0) - (Number(stockByWarehouse[a]) || 0));
 	const order = branch.includes(scope.native) ? [scope.native, ...others] : others;
-	if (!picked || !order.includes(picked)) return order;
-	return [picked, ...order.filter((wh) => wh !== picked)];
+	if (!picked) return order;
+	const withPicked = order.includes(picked) ? order : [...order, picked];
+	return pickedFirst ? [picked, ...withPicked.filter((wh) => wh !== picked)] : withPicked;
 }
 
 /**
@@ -72,65 +92,140 @@ export function allocateQty(qty, factor, warehouses, remaining) {
 }
 
 /**
+ * Where `qty` of one item would be drawn from, for the warehouse picker of the
+ * add/edit item dialogs (WarehouseStockList) - same order as previewSaleSplit.
+ *
+ * @param {Array<{warehouse: string, tier: string, stock_qty: number}>} warehouses
+ *   get_item_warehouse_stock rows, stock already in the dialog's UOM
+ * @param {number} qty - What the item needs in that UOM (whole cart included)
+ * @param {{selected?: string, manual?: boolean, storeStockFirst?: boolean}} [options]
+ * @returns {{chunks: Array<{warehouse: string, qty: number}>, shortfall: number}}
+ */
+export function previewWarehousePick(
+	warehouses,
+	qty,
+	{ selected = null, manual = false, storeStockFirst = false } = {}
+) {
+	const stockByWarehouse = {};
+	const companyByWarehouse = {};
+	let native = null;
+	for (const row of warehouses || []) {
+		stockByWarehouse[row.warehouse] = Math.max(0, Number(row.stock_qty) || 0);
+		if (row.tier === "outside") continue;
+		companyByWarehouse[row.warehouse] = {};
+		if (row.tier === "native") native = row.warehouse;
+	}
+	const picked = manual ? selected : null;
+	const order = warehouseOrder(
+		stockByWarehouse,
+		{ native, companyByWarehouse },
+		picked,
+		!storeStockFirst
+	);
+
+	const chunks = [];
+	let left = Number(qty) || 0;
+	for (const warehouse of order) {
+		if (left <= 0) break;
+		const take = Math.min(left, stockByWarehouse[warehouse] || 0);
+		if (take <= 0) continue;
+		chunks.push({ warehouse, qty: take });
+		left -= take;
+	}
+	return { chunks, shortfall: left > 1e-9 ? left : 0 };
+}
+
+/**
  * @param {Array<Object>} rows - posCart invoiceItems
  * @param {SaleScope} scope
  * @param {(itemCode: string) => Object<string, number>} stockOf - stock UOM per branch warehouse
- * @param {{storeStockFirst?: boolean}} [options] - POS Settings.store_stock_first
+ * @param {{storeStockFirst?: boolean, allocation?: Array<Array<{warehouse: string, qty: number}>>}} [options]
+ *   POS Settings.store_stock_first, and the server's allocation per row of `rows`
  * @returns {{
  *   rows: Map<string, Array<{warehouse: string, qty: number, company: string, abbr: string}>>,
  *   groups: Array<{company: string, abbr: string, amount: number}>,
- *   company: string
- * }} `company` is the session's own (POS Profile) company
+ *   company: string,
+ *   native: string
+ * }} `company` / `native` are the session's own (POS Profile) company / warehouse
  */
-export function previewSaleSplit(rows, scope, stockOf, { storeStockFirst = false } = {}) {
+export function previewSaleSplit(
+	rows,
+	scope,
+	stockOf,
+	{ storeStockFirst = false, allocation = null } = {}
+) {
 	const companyByWarehouse = scope?.companyByWarehouse || {};
-	const result = { rows: new Map(), groups: [], company: scope?.company || null };
-	if (!rows?.length || Object.keys(companyByWarehouse).length < 2) return result;
+	const result = {
+		rows: new Map(),
+		groups: [],
+		company: scope?.company || null,
+		native: scope?.native || null,
+	};
+	if (!needsAllocation(rows, scope)) return result;
 
 	const remaining = {};
 	const groups = new Map();
 
-	for (const row of rows) {
+	rows.forEach((row, index) => {
 		const qty = Number(row.quantity ?? row.qty) || 0;
 		const factor = Number(row.conversion_factor) || 1;
 		let chunks;
-		if (qty > 0 && isAutoAllocated(row, scope)) {
+		if (allocation?.[index]?.length) {
+			chunks = allocation[index];
+		} else if (qty > 0 && isAutoAllocated(row, scope)) {
 			if (!remaining[row.item_code])
 				remaining[row.item_code] = { ...(stockOf(row.item_code) || {}) };
+			const picked = row.warehouse_manual ? row.warehouse : null;
+			// Outside the branch: its own stock is checked on submit, as on the server
+			if (picked && !(picked in remaining[row.item_code]))
+				remaining[row.item_code][picked] = Number.POSITIVE_INFINITY;
 			chunks = allocateQty(
 				qty,
 				factor,
-				warehouseOrder(
-					remaining[row.item_code],
-					scope,
-					row.warehouse_manual && !storeStockFirst ? row.warehouse : null
-				),
+				warehouseOrder(remaining[row.item_code], scope, picked, !storeStockFirst),
 				remaining[row.item_code]
 			);
 		} else {
-			chunks = [{ warehouse: row.warehouse, qty }];
+			// An SPG order row keeps the split the order locked (loadPosOrder)
+			chunks = row.pos_order_chunks || [{ warehouse: row.warehouse, qty }];
 		}
 
 		const amount = Number(row.amount) || 0;
 		// Add ons bill with the row's first chunk, as on the server.
 		const addons = (row.addons || []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
 		const withCompany = chunks.map((chunk, index) => {
-			const info = companyByWarehouse[chunk.warehouse] || {
-				company: scope.company,
-				abbr: companyByWarehouse[scope.native]?.abbr || "",
-			};
+			const info = companyByWarehouse[chunk.warehouse] ||
+				(chunk.company && { company: chunk.company, abbr: chunk.abbr || "" }) || {
+					company: scope.company,
+					abbr: companyByWarehouse[scope.native]?.abbr || "",
+				};
 			const group = groups.get(info.company) || { ...info, amount: 0 };
 			group.amount += (qty ? (amount * chunk.qty) / qty : 0) + (index ? 0 : addons);
 			groups.set(info.company, group);
 			return { ...chunk, ...info };
 		});
 		result.rows.set(saleRowKey(row), withCompany);
-	}
+	});
 
 	result.groups = [...groups.values()].sort(
 		(a, b) => (a.company !== scope.company) - (b.company !== scope.company)
 	);
 	return result;
+}
+
+/**
+ * What the cart shows a sale ships from, as `[[item_code, warehouse, stock_qty]]`
+ * - the server refuses the sale when its allocation differs (check_allocation).
+ * Null when the session sells from one warehouse only.
+ */
+export function expectedAllocation(rows, split) {
+	if (!split.rows.size) return null;
+	return rows.flatMap((row) => {
+		const factor = Number(row.conversion_factor) || 1;
+		return (split.rows.get(saleRowKey(row)) || [])
+			.filter((chunk) => chunk.qty > 0)
+			.map((chunk) => [row.item_code, chunk.warehouse, chunk.qty * factor]);
+	});
 }
 
 /**
@@ -148,13 +243,24 @@ export function splitSubmissionItems(items, split) {
 		groups.get(company).items.push(row);
 	};
 	const baseOf = {};
+	const rowsPerKey = new Map();
+	for (const row of items || []) {
+		if (row.custom_addon_parent_key) continue;
+		rowsPerKey.set(saleRowKey(row), (rowsPerKey.get(saleRowKey(row)) || 0) + 1);
+	}
 
 	for (const row of items || []) {
 		if (row.custom_addon_parent_key) continue;
 		const qty = Number(row.qty) || 0;
-		const chunks = split.rows.get(saleRowKey(row)) || [
+		const fallback = [
 			{ company: split.company, abbr: sessionAbbr, warehouse: row.warehouse, qty },
 		];
+		let chunks = split.rows.get(saleRowKey(row)) || fallback;
+		// An SPG order line is submitted as one row per warehouse already
+		if (rowsPerKey.get(saleRowKey(row)) > 1) {
+			const own = chunks.find((chunk) => chunk.warehouse === row.warehouse);
+			chunks = own ? [{ ...own, qty }] : fallback;
+		}
 		// Chunks follow the cart quantity; a bundled free qty is billed on its own row
 		const chunkTotal = chunks.reduce((sum, c) => sum + c.qty, 0) || 1;
 		chunks.forEach((chunk, index) => {

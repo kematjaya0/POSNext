@@ -5,7 +5,7 @@ import { usePOSShiftStore } from "@/stores/posShift";
 import { parseError } from "@/utils/errorHandler";
 import { unwrapCouponValidation } from "@/utils/invoice";
 import { shouldValidateItemStock, checkStockAvailability } from "@/utils/stockValidator";
-import { previewSaleSplit } from "@/utils/saleSplit";
+import { expectedAllocation, needsAllocation, previewSaleSplit } from "@/utils/saleSplit";
 import { offlineState } from "@/utils/offline/offlineState";
 import { useToast } from "@/composables/useToast";
 import { useStockStore } from "@/stores/stock";
@@ -201,13 +201,63 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		{ immediate: true }
 	);
 
-	// Where each row ships from and how many invoices the sale becomes; the
-	// server makes the final call on submit (pos_next/api/split_invoice.py).
+	// The server's allocation of the cart (split_invoice.preview_allocation),
+	// asked again whenever the rows or their stock change. Until it answers,
+	// or while offline, saleSplit falls back to the local allocation.
+	const allocationRequest = computed(() => {
+		if (posOrder.value || !needsAllocation(invoiceItems.value, stockStore.scope)) return null;
+		const rows = invoiceItems.value.map((row) => ({
+			item_code: row.item_code,
+			qty: Number(row.quantity ?? row.qty) || 0,
+			uom: row.uom,
+			conversion_factor: Number(row.conversion_factor) || 1,
+			warehouse: row.warehouse,
+			warehouse_manual: row.warehouse_manual ? 1 : 0,
+			is_free_item: row.is_free_item || 0,
+			batch_no: row.batch_no,
+			serial_no: row.serial_no,
+		}));
+		if (!rows.length) return null;
+		const stock = rows.map((row) => stockStore.getStockByWarehouse(row.item_code));
+		return { rows, signature: JSON.stringify([posProfile.value, rows, stock]) };
+	});
+	const serverAllocation = ref({ signature: null, rows: null });
+	let allocationTimer = null;
+	watch(
+		() => allocationRequest.value?.signature,
+		() => {
+			clearTimeout(allocationTimer);
+			const request = allocationRequest.value;
+			if (!request || offlineState.isOffline) return;
+			allocationTimer = setTimeout(async () => {
+				try {
+					const response = await call("pos_next.api.split_invoice.preview_allocation", {
+						pos_profile: posProfile.value,
+						items: JSON.stringify(request.rows),
+					});
+					const rows = response?.message || response;
+					serverAllocation.value = { signature: request.signature, rows };
+				} catch (error) {
+					console.warn("preview_allocation failed", error);
+				}
+			}, 300);
+		}
+	);
+
+	// Where each row ships from and how many invoices the sale becomes.
 	const saleSplit = computed(() =>
 		previewSaleSplit(invoiceItems.value, stockStore.scope, stockStore.getStockByWarehouse, {
 			storeStockFirst: settingsStore.storeStockFirst,
+			allocation:
+				serverAllocation.value.signature === allocationRequest.value?.signature
+					? serverAllocation.value.rows
+					: null,
 		})
 	);
+
+	// What the cart shows the sale ships from - sent with the sale (or SPG
+	// order) so the server refuses it when its own allocation differs.
+	const getExpectedAllocation = () => expectedAllocation(invoiceItems.value, saleSplit.value);
 
 	// The session sells stock of several companies: submit goes straight to the
 	// server split instead of saving a single-company draft first.
@@ -334,13 +384,17 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			.filter(Boolean);
 		const wasOffline = offlineState.isOffline;
 
+		// Multi-company or not decides the submit path - never guess it from
+		// a scope that has not loaded yet
+		await stockStore.ensureScope(posProfile.value).catch(() => {});
 		const result = await baseSubmitInvoice(
 			targetDoctype.value,
 			deliveryDate.value,
 			writeOffAmount.value,
 			Boolean(options.isCreditSale),
 			options.receivableAccount || null,
-			isMultiCompanySession.value && targetDoctype.value === "Sales Invoice"
+			isMultiCompanySession.value && targetDoctype.value === "Sales Invoice",
+			getExpectedAllocation()
 		);
 		// Reset write-off amount after successful submission
 		if (result) {
@@ -2915,6 +2969,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		posOrder,
 		posOrderSalesPerson,
 		loadPosOrder,
+		getExpectedAllocation,
 
 		// Sales Order feature
 		targetDoctype,

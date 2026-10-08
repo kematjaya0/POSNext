@@ -7,6 +7,7 @@ import { logger } from "@/utils/logger";
 import { roundCurrency } from "@/utils/currency";
 import { getAddonCarrierItem } from "@/utils/itemAddons";
 import { generateUUID } from "@/utils/offline/uuid";
+import { saleRowKey } from "@/utils/saleSplit";
 
 const log = logger.create("Invoice");
 
@@ -1000,6 +1001,29 @@ export function useInvoice() {
 
 		const out = [];
 		for (const item of items) {
+			// An SPG order line locked stock in several warehouses: one row each,
+			// the row discount shared by qty (the last row takes the rounding)
+			if (item.pos_order_chunks?.length > 1) {
+				const total = Number(item.quantity) || 1;
+				const discount = Number(item.discount_amount) || 0;
+				let discountLeft = discount;
+				const addonRows = addonRowsForSubmission(item);
+				item.pos_order_chunks.forEach((chunk, index) => {
+					const last = index === item.pos_order_chunks.length - 1;
+					const share = last ? discountLeft : roundCurrency((discount * chunk.qty) / total);
+					discountLeft -= share;
+					const row = {
+						...mapRow(item, chunk.qty),
+						warehouse: chunk.warehouse,
+						discount_amount: share,
+					};
+					if (index === 0 && addonRows.length) row.custom_addon_key = item.addon_key;
+					out.push(row);
+				});
+				out.push(...addonRows);
+				continue;
+			}
+
 			const fq = Number.parseFloat(item.free_qty) || 0;
 			const bundledSameItemFree =
 				!item.is_free_item && fq > 0 && item.discount_source === "free_item";
@@ -1224,7 +1248,8 @@ export function useInvoice() {
 		writeOffAmount = 0,
 		isCreditSale = false,
 		receivableAccount = null,
-		directSubmit = false
+		directSubmit = false,
+		expectedAllocation = null
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -1272,6 +1297,10 @@ export function useInvoice() {
 				};
 				if (posOrder.value) {
 					invoiceData.custom_pos_order = posOrder.value;
+				} else if (expectedAllocation && targetDoctype === "Sales Invoice") {
+					// Warehouses the cart showed - the server refuses the sale if
+					// its allocation differs (split_invoice.check_allocation)
+					invoiceData.expected_allocation = expectedAllocation;
 				}
 
 				// "Pay on Receivable Account": route the invoice's debit_to to a chosen AR
@@ -1473,49 +1502,72 @@ export function useInvoice() {
 			}
 		}
 
-		invoiceItems.value = order.items
-			.filter((row) => !row.addon_parent_key && !(editable && row.is_free_item))
-			.map((row) => {
-				const priceListRate = Number.parseFloat(row.price_list_rate) || row.rate || 0;
-				const dropDiscount = editable && Boolean(row.pricing_rules);
-				const item = {
-					item_code: row.item_code,
-					item_name: row.item_name || row.item_code,
-					rate: priceListRate,
-					price_list_rate: priceListRate,
-					quantity: Number.parseFloat(row.qty) || 0,
-					discount_percentage: dropDiscount
-						? 0
-						: Number.parseFloat(row.discount_percentage) || 0,
-					discount_amount: dropDiscount
-						? 0
-						: Number.parseFloat(row.discount_amount) || 0,
-					tax_amount: 0,
-					amount: 0,
-					uom: row.uom,
-					stock_uom: row.stock_uom || row.uom,
-					conversion_factor: Number.parseFloat(row.conversion_factor) || 1,
-					warehouse: row.warehouse,
-					batch_no: row.batch_no,
-					serial_no: row.serial_no,
-					has_batch_no: row.batch_no ? 1 : 0,
-					has_serial_no: row.serial_no ? 1 : 0,
-					item_uoms: [],
-					pricing_rules: editable ? "" : row.pricing_rules || "",
-					is_free_item: row.is_free_item || 0,
-					keterangan: row.keterangan || "",
-				};
-				if (!editable) {
-					item.is_resolved_barcode = true;
-					item.pos_order_row = true;
-				}
-				if (row.addon_key && addonsByKey[row.addon_key]) {
-					item.addon_key = row.addon_key;
-					item.addons = addonsByKey[row.addon_key];
-				}
-				recalculateItem(item);
-				return item;
-			});
+		// The order splits a line over warehouses (stock toko first); the cart
+		// keeps one line per item + UOM and pos_order_chunks the split, shown
+		// in the cart and submitted as is (formatItemsForSubmission). An edited
+		// order drops the split: its qty can change, so it is allocated again
+		const lines = new Map();
+		for (const row of order.items) {
+			if (row.addon_parent_key || (editable && row.is_free_item)) continue;
+			const qty = Number.parseFloat(row.qty) || 0;
+			const discount = Number.parseFloat(row.discount_amount) || 0;
+			const key = `${saleRowKey(row)}|${row.batch_no || ""}|${row.serial_no || ""}`;
+			const line = lines.get(key);
+			if (line) {
+				line.qty += qty;
+				line.discount_amount += discount;
+				line.addon_key = line.addon_key || row.addon_key;
+				line.chunks.push({ warehouse: row.warehouse, qty });
+			} else {
+				lines.set(key, {
+					...row,
+					qty,
+					discount_amount: discount,
+					chunks: [{ warehouse: row.warehouse, qty }],
+				});
+			}
+		}
+
+		invoiceItems.value = [...lines.values()].map((row) => {
+			const priceListRate = Number.parseFloat(row.price_list_rate) || row.rate || 0;
+			const dropDiscount = editable && Boolean(row.pricing_rules);
+			const item = {
+				item_code: row.item_code,
+				item_name: row.item_name || row.item_code,
+				rate: priceListRate,
+				price_list_rate: priceListRate,
+				quantity: row.qty,
+				discount_percentage: dropDiscount
+					? 0
+					: Number.parseFloat(row.discount_percentage) || 0,
+				discount_amount: dropDiscount ? 0 : row.discount_amount,
+				tax_amount: 0,
+				amount: 0,
+				uom: row.uom,
+				stock_uom: row.stock_uom || row.uom,
+				conversion_factor: Number.parseFloat(row.conversion_factor) || 1,
+				warehouse: row.warehouse,
+				batch_no: row.batch_no,
+				serial_no: row.serial_no,
+				has_batch_no: row.batch_no ? 1 : 0,
+				has_serial_no: row.serial_no ? 1 : 0,
+				item_uoms: [],
+				pricing_rules: editable ? "" : row.pricing_rules || "",
+				is_free_item: row.is_free_item || 0,
+				keterangan: row.keterangan || "",
+			};
+			if (!editable) {
+				item.pos_order_chunks = row.chunks;
+				item.is_resolved_barcode = true;
+				item.pos_order_row = true;
+			}
+			if (row.addon_key && addonsByKey[row.addon_key]) {
+				item.addon_key = row.addon_key;
+				item.addons = addonsByKey[row.addon_key];
+			}
+			recalculateItem(item);
+			return item;
+		});
 
 		additionalDiscount.value = Number.parseFloat(order.discount_amount) || 0;
 		couponCode.value = editable ? null : order.coupon_code || null;

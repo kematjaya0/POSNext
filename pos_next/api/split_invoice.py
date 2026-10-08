@@ -13,7 +13,9 @@ ships from and bills each company on its own invoice:
   then group rows per company. A row that needs two warehouses becomes one
   invoice row per warehouse. A branch warehouse the cashier picked by hand is
   drawn first, unless POS Settings.store_stock_first says the session
-  warehouse must run out first.
+  warehouse must run out first. ``preview_allocation`` shows the cart the
+  same allocation; the sale is refused when it changed since
+  (``check_allocation``).
 * ``submit_split_sale`` - create every invoice in the request's transaction,
   share the basket discount and the payment between them, and submit them all
   (or keep them all as drafts when a ``pos_next_split_hold`` hook says so).
@@ -23,6 +25,7 @@ split here, so promotions keep working on the whole basket.
 """
 
 import json
+from collections import defaultdict
 
 import frappe
 from frappe import _
@@ -60,10 +63,13 @@ def plan_sale(invoice):
 	"""
 	profile = frappe.get_cached_doc("POS Profile", invoice.get("pos_profile"))
 	items = [dict(row) for row in invoice.get("items") or []]
+	expected = invoice.pop("expected_allocation", None)
 
 	# SPG order rows ship from the warehouse the order locked.
 	if not invoice.get("custom_pos_order"):
 		_allocate_rows(items, profile)
+	if expected is not None:
+		check_allocation(items, expected)
 	for row in items:
 		row.pop("warehouse_manual", None)
 
@@ -107,11 +113,16 @@ def _allocate_rows(items, profile):
 	The cart keeps one row per item + UOM, so a hand-picked branch warehouse
 	cannot pin the whole row - it would carry qty the cashier added from the
 	session warehouse too. It only moves to the front of the order, and not
-	even that while store_stock_first is on.
+	even that while store_stock_first is on. A hand-picked warehouse outside
+	the branch joins the end of the order and supplies whatever the branch
+	cannot (its own stock is checked on submit).
 	"""
 	scope = get_session_scope(profile)
 	branch = scope["branch"]
-	if len(branch) < 2:
+	picked_outside = any(
+		cint(row.get("warehouse_manual")) and row.get("warehouse") not in branch for row in items
+	)
+	if len(branch) < 2 and not picked_outside:
 		return
 
 	candidates = [row for row in items if _is_auto_allocated(row, branch)]
@@ -126,6 +137,9 @@ def _allocate_rows(items, profile):
 	store_first = store_stock_first(profile.name)
 
 	remaining = {code: dict((stock.get(code) or {}).get("stock_by_warehouse") or {}) for code in item_codes}
+	need = defaultdict(float)
+	for row in candidates:
+		need[row["item_code"]] += flt(row.get("qty")) * (flt(row.get("conversion_factor")) or 1.0)
 	allocated = []
 	for row in items:
 		if id(row) not in candidate_ids:
@@ -133,10 +147,83 @@ def _allocate_rows(items, profile):
 			continue
 		order = order_by_item[row["item_code"]]
 		picked = row.get("warehouse")
-		if cint(row.get("warehouse_manual")) and not store_first and picked in order:
+		manual = cint(row.get("warehouse_manual"))
+		if manual and picked and picked not in order:
+			order = [*order, picked]
+			remaining[row["item_code"]].setdefault(picked, need[row["item_code"]])
+		if manual and not store_first:
 			order = [picked] + [warehouse for warehouse in order if warehouse != picked]
 		allocated.extend(_split_row(row, order, remaining[row["item_code"]], whole_uoms))
+	# Add ons ship (and bill) with their base row's first chunk.
+	base_warehouse = {
+		row["custom_addon_key"]: row.get("warehouse") for row in allocated if row.get("custom_addon_key")
+	}
+	for row in allocated:
+		if row.get("custom_addon_parent_key") in base_warehouse:
+			row["warehouse"] = base_warehouse[row["custom_addon_parent_key"]]
 	items[:] = allocated
+
+
+@frappe.whitelist()
+def preview_allocation(pos_profile, items):
+	"""Where ``_allocate_rows`` ships each cart row from, for the cart to show
+	before the sale is paid: ``[[{"warehouse", "qty"}, ...], ...]`` per row of
+	``items``, in order."""
+	profile = frappe.get_cached_doc("POS Profile", pos_profile)
+	items = [dict(row, _row=index) for index, row in enumerate(frappe.parse_json(items) or [])]
+	result = [[] for _ in items]
+	_allocate_rows(items, profile)
+	company = dict(
+		frappe.get_all(
+			"Warehouse",
+			filters={"name": ["in", list({row.get("warehouse") for row in items})]},
+			fields=["name", "company"],
+			as_list=True,
+		)
+	)
+	abbr = dict(frappe.get_all("Company", fields=["name", "abbr"], as_list=True))
+	for row in items:
+		warehouse = row.get("warehouse")
+		result[row["_row"]].append(
+			{
+				"warehouse": warehouse,
+				"qty": flt(row.get("qty")),
+				"company": company.get(warehouse),
+				"abbr": abbr.get(company.get(warehouse)),
+			}
+		)
+	return result
+
+
+def check_allocation(items, expected):
+	"""Throw unless `items` ship from the warehouses the cart showed.
+
+	``expected`` is ``[[item_code, warehouse, stock_qty], ...]`` from the cart's
+	split preview. Stock that moved since the preview changes the allocation;
+	the cashier must see that before the sale goes through. Add on rows carry
+	no stock and are left out on both sides.
+	"""
+	actual = defaultdict(float)
+	for row in items:
+		if not row.get("custom_addon_parent_key"):
+			factor = flt(row.get("conversion_factor")) or 1.0
+			actual[(row.get("item_code"), row.get("warehouse"))] += flt(row.get("qty")) * factor
+	shown = defaultdict(float)
+	for item_code, warehouse, qty in frappe.parse_json(expected) or []:
+		shown[(item_code, warehouse)] += flt(qty)
+
+	changed = [key for key in actual.keys() | shown.keys() if flt(actual[key] - shown[key], 6)]
+	if changed:
+		frappe.throw(
+			_("Pembagian gudang berubah karena stok berubah: {0}. Periksa keranjang lalu ulangi.").format(
+				"; ".join(
+					f"{item_code} {warehouse}: {flt(shown[(item_code, warehouse)], 3)} → "
+					f"{flt(actual[(item_code, warehouse)], 3)}"
+					for item_code, warehouse in changed
+				)
+			),
+			title=_("Alokasi Gudang Berubah"),
+		)
 
 
 def store_stock_first(pos_profile):
@@ -156,8 +243,8 @@ def _is_auto_allocated(row, branch):
 		return False
 	if row.get("batch_no") or row.get("serial_no"):
 		return False
-	# A hand-picked warehouse outside the branch is never re-allocated.
-	return not row.get("warehouse") or row.get("warehouse") in branch
+	# A warehouse outside the branch only comes in when the cashier picked it.
+	return not row.get("warehouse") or row.get("warehouse") in branch or cint(row.get("warehouse_manual"))
 
 
 def _warehouse_order(item_code, branch, native):

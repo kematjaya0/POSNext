@@ -187,6 +187,7 @@
 						auto-select
 						@warehouse-stock="selectedWarehouseStock = $event"
 						@picked-by-hand="warehouseManual = $event"
+						@pick-stock="pickStock = $event"
 					/>
 
 					<!-- Quantity Control -->
@@ -425,6 +426,8 @@ const options = ref([]);
 const selectedOption = ref(null);
 const selectedWarehouse = ref("");
 const selectedWarehouseStock = ref(null);
+// Stock the needed qty is drawn from across the warehouses (WarehouseStockList)
+const pickStock = ref(null);
 const warehouseManual = ref(false);
 const quantity = ref(1);
 const keterangan = ref("");
@@ -463,17 +466,19 @@ const confirmButtonText = computed(() => {
 const stockWarning = computed(() => {
 	if (props.mode !== "uom" || !selectedOption.value) return null;
 
-	// Prefer the stock of the warehouse chosen in WarehouseStockList (already
-	// converted to the selected UOM) - falls back to the option's own stock
-	// when that list hides itself (single-warehouse case, unchanged behavior)
+	// Prefer what WarehouseStockList draws the qty from (the store first, the
+	// rest from the other warehouses; already in the selected UOM) - falls
+	// back to the option's own stock when that list hides itself
+	// (single-warehouse case, unchanged behavior)
 	const availableStock =
+		pickStock.value ??
 		selectedWarehouseStock.value?.stock_qty ??
 		selectedOption.value.stock_qty ??
 		selectedOption.value.actual_qty ??
 		null;
 	if (availableStock === null) return null;
 
-	// The cart keeps one row per item + UOM, so the warehouse must cover what
+	// The cart keeps one row per item + UOM, so the warehouses must cover what
 	// the cart already holds as well
 	if (neededQty.value > availableStock) {
 		return __("Requested quantity ({0}) exceeds available stock ({1})", [

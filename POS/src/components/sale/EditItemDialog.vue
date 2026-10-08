@@ -260,6 +260,7 @@
 												:uom="localUom"
 												:pos-profile="editItemPosProfile"
 												:qty="neededQty"
+												:manual="Boolean(localItem?.warehouse_manual)"
 												@update:model-value="handleWarehouseChange"
 												@picked-by-hand="warehousePickedByHand = $event"
 											/>

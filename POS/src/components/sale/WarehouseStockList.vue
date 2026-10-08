@@ -34,7 +34,7 @@
 					@click="select(row)"
 					:class="[
 						'rounded-xl px-3 py-2.5 flex items-center justify-between gap-2.5 text-start transition-colors touch-manipulation',
-						row.warehouse === modelValue
+						isActive(row)
 							? 'bg-blue-600 text-white shadow-lg ring-2 ring-blue-300'
 							: isDisabled(row)
 							? 'bg-gray-50 text-gray-400 cursor-not-allowed'
@@ -45,9 +45,7 @@
 						<span
 							class="w-4 h-4 rounded-full border-2 flex-shrink-0"
 							:class="
-								row.warehouse === modelValue
-									? 'border-white bg-white'
-									: 'border-gray-300'
+								isActive(row) ? 'border-white bg-white' : 'border-gray-300'
 							"
 						/>
 						<span class="font-semibold text-sm truncate">{{
@@ -57,7 +55,7 @@
 							v-if="row.company_abbr"
 							class="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded flex-shrink-0"
 							:class="
-								row.warehouse === modelValue
+								isActive(row)
 									? 'bg-white/25'
 									: 'bg-blue-100 text-blue-700'
 							"
@@ -65,21 +63,47 @@
 							{{ row.company_abbr }}
 						</span>
 					</div>
-					<span
-						class="text-sm font-bold flex-shrink-0"
-						:class="
-							row.stock_qty <= 0
-								? row.warehouse === modelValue
-									? 'text-red-100'
-									: 'text-red-600'
-								: ''
-						"
-					>
-						{{ formatQty(row.stock_qty) }}{{ uom ? " " + uom : "" }}
-					</span>
+					<div class="flex flex-col items-end flex-shrink-0">
+						<span
+							class="text-sm font-bold"
+							:class="
+								row.stock_qty <= 0
+									? isActive(row)
+										? 'text-red-100'
+										: 'text-red-600'
+									: ''
+							"
+						>
+							{{ formatQty(row.stock_qty) }}{{ uom ? " " + uom : "" }}
+						</span>
+						<span
+							v-if="takeOf(row)"
+							class="text-[11px] font-semibold"
+							:class="isActive(row) ? 'text-blue-100' : 'text-blue-700'"
+						>
+							{{ __("Diambil {0}", [formatQty(takeOf(row)) + (uom ? " " + uom : "")]) }}
+						</span>
+					</div>
 				</button>
 			</div>
 		</template>
+		<p
+			v-if="pickSummary"
+			class="text-xs text-blue-800 bg-blue-50 border border-blue-200 rounded-lg p-2 mt-2"
+		>
+			{{ pickSummary }}
+		</p>
+		<p
+			v-if="pick.shortfall > 0"
+			class="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 mt-2"
+		>
+			{{
+				__("Stok semua gudang kurang {0} untuk qty {1}.", [
+					formatQty(pick.shortfall) + (uom ? " " + uom : ""),
+					formatQty(qty),
+				])
+			}}
+		</p>
 		<p
 			v-if="storeStockNotice"
 			:class="[
@@ -143,6 +167,11 @@
  * Only rows with stock > 0 are listed; the selected row stays visible even
  * at 0 so the cashier can see where the cart row currently comes from.
  *
+ * Rows the qty is drawn from are highlighted like the selection, with a
+ * "Diambil" badge (previewWarehousePick), whenever it is not simply the
+ * selected row alone - e.g. 3 Kg against 2 Kg in the store: the store row
+ * takes 2, the picked warehouse the other 1.
+ *
  * Store stock first: while the session (native) warehouse can cover `qty`,
  * another branch warehouse is locked when POS Settings.store_stock_first is
  * on, and only warned about when it is off. The server draws the session
@@ -150,6 +179,7 @@
  */
 import { call } from "@/utils/apiWrapper";
 import { usePOSSettingsStore } from "@/stores/posSettings";
+import { previewWarehousePick } from "@/utils/saleSplit";
 import { pickSessionWarehouse } from "@/utils/stockValidator";
 import { computed, ref, watch } from "vue";
 
@@ -161,9 +191,16 @@ const props = defineProps({
 	// Requested quantity in `uom` - gates the "outside" tier
 	qty: { type: Number, default: 0 },
 	autoSelect: { type: Boolean, default: false },
+	// The cart row was already pinned by hand (edit dialog)
+	manual: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["update:modelValue", "warehouse-stock", "picked-by-hand"]);
+const emit = defineEmits([
+	"update:modelValue",
+	"warehouse-stock",
+	"picked-by-hand",
+	"pick-stock",
+]);
 
 const settingsStore = usePOSSettingsStore();
 
@@ -214,6 +251,43 @@ const selectedRow = computed(
 	() => warehouses.value.find((w) => w.warehouse === props.modelValue) || null
 );
 
+const pick = computed(() =>
+	previewWarehousePick(warehouses.value, props.qty, {
+		selected: props.modelValue,
+		manual: pickedByHand.value || props.manual,
+		storeStockFirst: settingsStore.storeStockFirst,
+	})
+);
+
+// Only once the qty no longer comes from the selected row alone
+const splitShown = computed(() => {
+	const { chunks } = pick.value;
+	return chunks.length > 1 || (chunks.length === 1 && chunks[0].warehouse !== props.modelValue);
+});
+
+const takeByWarehouse = computed(() =>
+	splitShown.value
+		? Object.fromEntries(pick.value.chunks.map((chunk) => [chunk.warehouse, chunk.qty]))
+		: {}
+);
+
+const takeOf = (row) => takeByWarehouse.value[row.warehouse] || 0;
+
+// Highlighted like the selection: the selected row, and every row the qty is
+// drawn from (the store row too when it covers part of the qty)
+const isActive = (row) => row.warehouse === props.modelValue || takeOf(row) > 0;
+
+const pickSummary = computed(() => {
+	if (!splitShown.value) return null;
+	const parts = pick.value.chunks.map((chunk) => {
+		const name =
+			warehouses.value.find((w) => w.warehouse === chunk.warehouse)?.warehouse_name ||
+			chunk.warehouse;
+		return `${name} ${formatQty(chunk.qty)}${props.uom ? " " + props.uom : ""}`;
+	});
+	return __("Diambil dari: {0}", [parts.join(" + ")]);
+});
+
 const storeStockNotice = computed(() => {
 	const nativeName = warehouses.value.find((w) => w.tier === "native")?.warehouse_name;
 	if (!nativeName || nativeStock.value <= 0) return null;
@@ -229,7 +303,7 @@ const storeStockNotice = computed(() => {
 				),
 			};
 		}
-		if (selectedRow.value && selectedRow.value.tier !== "native") {
+		if (!splitShown.value && selectedRow.value && selectedRow.value.tier !== "native") {
 			return {
 				blocking: false,
 				message: __("Stok {0} ({1}) dipakai dulu, sisanya diambil dari gudang lain.", [
@@ -258,6 +332,13 @@ const selectedCrossCompany = computed(() =>
 );
 
 watch(selectedRow, (row) => emit("warehouse-stock", row), { immediate: true });
+
+// Stock the qty is drawn from across the warehouses (null without a list)
+watch(
+	() => (showList.value ? pick.value.chunks.reduce((sum, c) => sum + c.qty, 0) : null),
+	(qty) => emit("pick-stock", qty),
+	{ immediate: true }
+);
 
 function autoSelect() {
 	if (!props.autoSelect || pickedByHand.value) return;

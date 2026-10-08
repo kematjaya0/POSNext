@@ -92,6 +92,50 @@ export function allocateQty(qty, factor, warehouses, remaining) {
 }
 
 /**
+ * Where `qty` of one item would be drawn from, for the warehouse picker of the
+ * add/edit item dialogs (WarehouseStockList) - same order as previewSaleSplit.
+ *
+ * @param {Array<{warehouse: string, tier: string, stock_qty: number}>} warehouses
+ *   get_item_warehouse_stock rows, stock already in the dialog's UOM
+ * @param {number} qty - What the item needs in that UOM (whole cart included)
+ * @param {{selected?: string, manual?: boolean, storeStockFirst?: boolean}} [options]
+ * @returns {{chunks: Array<{warehouse: string, qty: number}>, shortfall: number}}
+ */
+export function previewWarehousePick(
+	warehouses,
+	qty,
+	{ selected = null, manual = false, storeStockFirst = false } = {}
+) {
+	const stockByWarehouse = {};
+	const companyByWarehouse = {};
+	let native = null;
+	for (const row of warehouses || []) {
+		stockByWarehouse[row.warehouse] = Math.max(0, Number(row.stock_qty) || 0);
+		if (row.tier === "outside") continue;
+		companyByWarehouse[row.warehouse] = {};
+		if (row.tier === "native") native = row.warehouse;
+	}
+	const picked = manual ? selected : null;
+	const order = warehouseOrder(
+		stockByWarehouse,
+		{ native, companyByWarehouse },
+		picked,
+		!storeStockFirst
+	);
+
+	const chunks = [];
+	let left = Number(qty) || 0;
+	for (const warehouse of order) {
+		if (left <= 0) break;
+		const take = Math.min(left, stockByWarehouse[warehouse] || 0);
+		if (take <= 0) continue;
+		chunks.push({ warehouse, qty: take });
+		left -= take;
+	}
+	return { chunks, shortfall: left > 1e-9 ? left : 0 };
+}
+
+/**
  * @param {Array<Object>} rows - posCart invoiceItems
  * @param {SaleScope} scope
  * @param {(itemCode: string) => Object<string, number>} stockOf - stock UOM per branch warehouse

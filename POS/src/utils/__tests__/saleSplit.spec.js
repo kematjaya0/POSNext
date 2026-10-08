@@ -4,6 +4,7 @@ import {
 	allocateQty,
 	expectedAllocation,
 	previewSaleSplit,
+	previewWarehousePick,
 	saleRowKey,
 	splitSubmissionItems,
 } from "../saleSplit";
@@ -239,5 +240,48 @@ describe("server allocation and SPG order lines", () => {
 			companyByWarehouse: { "UTAMA - MJP": scope.companyByWarehouse["UTAMA - MJP"] },
 		};
 		expect(expectedAllocation([row()], previewSaleSplit([row()], single, stockOf))).toBeNull();
+	});
+});
+
+describe("previewWarehousePick", () => {
+	const warehouses = [
+		{ warehouse: "TOKO", tier: "native", stock_qty: 2 },
+		{ warehouse: "GUDANG", tier: "branch", stock_qty: 10 },
+		{ warehouse: "LUAR", tier: "outside", stock_qty: 5 },
+	];
+
+	it("takes the store stock first and the rest from the picked warehouse", () => {
+		const pick = previewWarehousePick(warehouses, 3, {
+			selected: "GUDANG",
+			manual: true,
+			storeStockFirst: true,
+		});
+		expect(pick).toEqual({
+			chunks: [
+				{ warehouse: "TOKO", qty: 2 },
+				{ warehouse: "GUDANG", qty: 1 },
+			],
+			shortfall: 0,
+		});
+	});
+
+	it("draws the hand-picked warehouse first when store_stock_first is off", () => {
+		const pick = previewWarehousePick(warehouses, 3, { selected: "GUDANG", manual: true });
+		expect(pick.chunks).toEqual([{ warehouse: "GUDANG", qty: 3 }]);
+	});
+
+	it("reaches a warehouse outside the branch only when picked", () => {
+		expect(previewWarehousePick(warehouses, 14).shortfall).toBe(2);
+		const pick = previewWarehousePick(warehouses, 14, {
+			selected: "LUAR",
+			manual: true,
+			storeStockFirst: true,
+		});
+		expect(pick.chunks).toEqual([
+			{ warehouse: "TOKO", qty: 2 },
+			{ warehouse: "GUDANG", qty: 10 },
+			{ warehouse: "LUAR", qty: 2 },
+		]);
+		expect(pick.shortfall).toBe(0);
 	});
 });

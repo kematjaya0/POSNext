@@ -1406,26 +1406,104 @@
 								</div>
 							</div>
 
-							<!-- Warehouses the row ships from (saleSplit preview) -->
-							<!-- One sub-row per warehouse the row ships from (saleSplit) -->
-							<div
-								v-for="(part, index) in rowAllocation(item) || []"
-								:key="part.warehouse"
-								class="flex items-center gap-2 ps-3 mt-0.5 text-[11px] sm:text-xs text-amber-700"
-								:title="`${part.warehouse} (${part.abbr})`"
-							>
-								<span class="text-gray-400">{{
-									index === rowAllocation(item).length - 1 ? "└" : "├"
-								}}</span>
-								<span class="truncate flex-1 min-w-0">
-									{{ part.warehouse }}
-									<span v-if="part.isStore" class="text-gray-500">({{ __("toko") }})</span>
-								</span>
-								<span class="flex-shrink-0">{{ part.qty }} {{ item.uom || item.stock_uom }}</span>
-								<span class="flex-shrink-0 w-24 text-end font-semibold">{{
-									formatCurrency(part.amount)
-								}}</span>
-							</div>
+							<!-- Warehouses the row ships from (saleSplit), one line each -->
+							<template v-for="parts in [rowAllocation(item)]" :key="'allocation'">
+								<div
+									v-if="parts"
+									class="mt-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:px-2.5"
+								>
+									<div
+										class="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+									>
+										<svg
+											class="w-3 h-3 flex-shrink-0"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											viewBox="0 0 24 24"
+										>
+											<path d="M21 8l-9-5-9 5 9 5 9-5z" />
+											<path d="M3 8v8l9 5 9-5V8" />
+											<path d="M12 13v8" />
+										</svg>
+										{{ __("Diambil dari {0} gudang", [parts.length]) }}
+									</div>
+									<div
+										class="mt-1 ms-1.5 ps-2.5 border-s-2 border-slate-300 flex flex-col gap-1"
+									>
+										<div
+											v-for="part in parts"
+											:key="part.warehouse"
+											class="flex items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs"
+											:title="part.warehouse"
+										>
+											<span
+												:class="[
+													'w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0',
+													part.isStore
+														? 'bg-blue-100 text-blue-700'
+														: 'bg-orange-100 text-orange-700',
+												]"
+											>
+												<svg
+													v-if="part.isStore"
+													class="w-3 h-3"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													viewBox="0 0 24 24"
+												>
+													<path d="M3 9l1.5-5h15L21 9" />
+													<path d="M4 9v11h16V9" />
+													<path d="M9 20v-6h6v6" />
+												</svg>
+												<svg
+													v-else
+													class="w-3 h-3"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													viewBox="0 0 24 24"
+												>
+													<path d="M3 21V8l9-5 9 5v13" />
+													<path d="M7 21v-8h10v8" />
+													<path d="M7 17h10" />
+												</svg>
+											</span>
+											<span
+												:class="[
+													'truncate min-w-0 font-semibold',
+													part.isStore ? 'text-blue-900' : 'text-orange-900',
+												]"
+												>{{ part.name }}</span
+											>
+											<span
+												v-if="part.isStore || part.abbr"
+												:class="[
+													'text-[9px] sm:text-[10px] font-bold rounded px-1.5 py-px flex-shrink-0',
+													part.isStore
+														? 'bg-blue-100 text-blue-700'
+														: 'bg-orange-100 text-orange-800',
+												]"
+												>{{ part.isStore ? __("TOKO") : part.abbr }}</span
+											>
+											<span class="flex-1" />
+											<span
+												:class="[
+													'flex-shrink-0 font-bold rounded-full border px-2 py-px',
+													part.isStore
+														? 'bg-blue-50 border-blue-200 text-blue-700'
+														: 'bg-orange-50 border-orange-200 text-orange-700',
+												]"
+												>{{ part.qty }} {{ item.uom || item.stock_uom }}</span
+											>
+											<span class="flex-shrink-0 w-20 sm:w-24 text-end text-slate-600">{{
+												formatCurrency(part.amount)
+											}}</span>
+										</div>
+									</div>
+								</div>
+							</template>
 
 							<div
 								v-if="item.keterangan"
@@ -1725,7 +1803,8 @@ const splitGroups = computed(() => {
 });
 
 // The row's share per warehouse it ships from, whenever that is not all the
-// session (toko) warehouse - shown as sub-rows; qty and delete stay on the row
+// session (toko) warehouse - shown in a panel under the row, one line per
+// warehouse; qty and delete stay on the row
 function rowAllocation(item) {
 	const chunks = cartStore.saleSplit.rows.get(saleRowKey(item));
 	if (!chunks?.length) return null;
@@ -1735,6 +1814,10 @@ function rowAllocation(item) {
 	const amount = item.amount || item.rate * item.quantity || 0;
 	return chunks.map((c) => ({
 		warehouse: c.warehouse,
+		// "Toko Utama - CGNU" -> "Toko Utama"; the company shows as its own tag
+		name: c.abbr && c.warehouse.endsWith(` - ${c.abbr}`)
+			? c.warehouse.slice(0, -(c.abbr.length + 3))
+			: c.warehouse,
 		abbr: c.abbr,
 		isStore: c.warehouse === native,
 		qty: Number.isInteger(c.qty) ? c.qty : Number(c.qty).toFixed(2),

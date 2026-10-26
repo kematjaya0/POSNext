@@ -30,6 +30,13 @@ body {
 	z-index: 500 !important;
 }
 
+/* Numbers and amounts align right so the ones digit lines up and a stray zero is
+   easy to spot. :where() keeps specificity at 0, so a field that asks for another
+   alignment (the centered PIN box, the quantity stepper) still wins. */
+:where(input[type="number"], input[inputmode="numeric"], input[inputmode="decimal"]) {
+	text-align: right;
+}
+
 /* Mobile touch optimizations - removes 300ms tap delay and improves scrolling */
 .touch-manipulation {
 	touch-action: manipulation;

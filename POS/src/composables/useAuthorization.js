@@ -5,6 +5,11 @@ import { reactive } from "vue";
 
 const log = logger.create("Authorization");
 
+// Aksi yang daftar penyetujunya disaring server nextend (mis. kepala toko cabang itu saja).
+const AUTHORIZER_ENDPOINTS = {
+	"Cash Expense": "nextend.pengeluaran_kas.get_authorizers",
+};
+
 const state = reactive({
 	open: false,
 	action: null,
@@ -71,7 +76,7 @@ export function useAuthorization() {
 export function useAuthorizationDialog() {
 	async function loadAuthorizers() {
 		try {
-			return await call("pos_next.api.authorization.get_authorizers", {
+			return await call(AUTHORIZER_ENDPOINTS[state.action] || "pos_next.api.authorization.get_authorizers", {
 				action: state.action,
 				pos_profile: state.context?.pos_profile,
 				context: JSON.stringify(state.context || {}),

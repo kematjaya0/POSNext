@@ -425,6 +425,15 @@ def get_pos_invoices(pos_opening_shift, doctype=None):
 	return data
 
 
+def _shift_expenses(pos_opening_shift, company):
+	"""Pengeluaran kas dari laci shift ini (nextend). Kosong tanpa nextend."""
+	if not frappe.db.table_exists("Pengeluaran Kas"):
+		return {"by_mode": {}, "rows": [], "total": 0}
+	from nextend.pengeluaran_kas import shift_expenses
+
+	return shift_expenses(pos_opening_shift, company)
+
+
 @frappe.whitelist()
 def get_payments_entries(pos_opening_shift):
 	return frappe.get_all(
@@ -699,6 +708,12 @@ def _build_company_closing(opening_shift, company, invoices, payment_entries, wi
 		amount = get_base_value(py, "paid_amount", "base_paid_amount")
 		_aggregate_payment(payments, py.mode_of_payment, amount)
 
+	# nextend: uang yang dibayarkan keluar dari laci shift ini mengurangi
+	# yang seharusnya ada saat tutup shift (get_payments_entries hanya ambil "Receive").
+	expenses = _shift_expenses(opening_shift.get("name"), company)
+	for mode, amount in expenses["by_mode"].items():
+		_aggregate_payment(payments, mode, -flt(amount))
+
 	# Update closing shift with totals
 	closing_shift.grand_total = summary["grand_total"]
 	closing_shift.net_total = summary["net_total"]
@@ -725,6 +740,8 @@ def _build_company_closing(opening_shift, company, invoices, payment_entries, wi
 			"sales_total": summary["sales_total"],
 			"sales_count": summary["sales_count"],
 			"pos_transactions": pos_transactions,  # Include return info for display
+			"expenses": expenses["rows"],
+			"expenses_total": expenses["total"],
 		}
 	)
 

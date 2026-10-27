@@ -829,6 +829,29 @@
 										</div>
 									</div>
 								</div>
+								<div
+									v-if="(company.expenses || []).length"
+									class="border border-amber-200 bg-amber-50 rounded-lg p-3 md:p-4"
+								>
+									<div class="flex items-center justify-between mb-2">
+										<h4 class="text-start text-sm font-semibold text-gray-800">
+											{{ __("Pengeluaran Kas") }}
+										</h4>
+										<span class="text-sm font-semibold text-amber-800">
+											-{{ formatCurrency(company.expenses_total) }}
+										</span>
+									</div>
+									<div
+										v-for="row in company.expenses"
+										:key="row.name"
+										class="flex items-start justify-between gap-2 text-xs md:text-sm text-gray-700 py-1 border-t border-amber-100"
+									>
+										<span class="text-start">
+											{{ row.posting_date }} · {{ row.jenis }} · {{ row.penerima }}
+										</span>
+										<span class="font-medium whitespace-nowrap">{{ formatCurrency(row.total) }}</span>
+									</div>
+								</div>
 								</template>
 							</div>
 						</div>

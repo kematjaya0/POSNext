@@ -41,6 +41,13 @@
 						<span>{{ __("Pemakaian Tinta") }}</span>
 					</button>
 					<button
+						v-if="pengeluaranKas.allowed && !offlineStore.isOffline"
+						@click="showPengeluaranKasDialog = true"
+						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 transition-colors"
+					>
+						<span>{{ __("Pengeluaran Kas") }}</span>
+					</button>
+					<button
 						v-if="!shiftStore.isSpgMode"
 						@click="showTerimaTransferDialog = true"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-green-50 flex items-center gap-3 transition-colors"
@@ -358,6 +365,7 @@
 				<!-- Icon-Only Management Slider - Always Visible -->
 				<ManagementSlider
 					:show-tinta-usage="tintaUsage.allowed"
+					:show-cash-expense="pengeluaranKas.allowed && !offlineStore.isOffline"
 					@menu-clicked="handleManagementMenuClick"
 				/>
 
@@ -708,6 +716,10 @@
 				v-model="showPemakaianTintaDialog"
 				:warehouses="tintaUsage.warehouses"
 				:default-warehouse="shiftStore.currentProfile?.warehouse || ''"
+			/>
+			<PengeluaranKasDialog
+				v-model="showPengeluaranKasDialog"
+				:offline="offlineStore.isOffline"
 			/>
 			<TerimaTransferDialog
 				v-model="showTerimaTransferDialog"
@@ -1267,6 +1279,7 @@ let _posInitPromise = null;
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import PemakaianTintaDialog from "@/components/sale/PemakaianTintaDialog.vue";
+import PengeluaranKasDialog from "@/components/sale/PengeluaranKasDialog.vue";
 import PanduanDialog from "@/components/sale/PanduanDialog.vue";
 import TerimaTransferDialog from "@/components/sale/TerimaTransferDialog.vue";
 import TransferShiftDialog from "@/components/sale/TransferShiftDialog.vue";
@@ -1669,6 +1682,19 @@ async function loadTintaUsageContext() {
 		// Offline or nextend without this feature - the menu stays hidden
 	}
 }
+const showPengeluaranKasDialog = ref(false);
+// nextend.pengeluaran_kas: menu hanya untuk kasir dengan shift terbuka, online saja
+const pengeluaranKas = ref({ allowed: false });
+
+async function loadPengeluaranKasContext() {
+	try {
+		pengeluaranKas.value = (await call("nextend.pengeluaran_kas.get_context")) || pengeluaranKas.value;
+	} catch {
+		// Offline or nextend without this feature - the menu stays hidden
+	}
+}
+// Shift dibuka setelah halaman termuat: menu baru perlu konteksnya lagi.
+watch(() => shiftStore.currentShift?.name, loadPengeluaranKasContext);
 // nextend.panduan: docs marked "Tampil di POS" that the user's roles may read.
 // The menu is always shown; the list is fetched each time the dialog opens.
 const showPanduanDialog = ref(false);
@@ -1818,6 +1844,7 @@ let bodyStyleSnapshot = null;
 onMounted(async () => {
 	loadCachedAddonCatalog();
 	loadTintaUsageContext();
+	loadPengeluaranKasContext();
 
 	// Window resize listeners (passive for better performance)
 	const handleResize = () => {
@@ -3825,6 +3852,8 @@ function handleManagementMenuClick(menuItem) {
 		showInvoiceManagement.value = true;
 	} else if (menuItem === "tinta") {
 		showPemakaianTintaDialog.value = true;
+	} else if (menuItem === "pengeluaran") {
+		showPengeluaranKasDialog.value = true;
 	} else if (menuItem === "panduan") {
 		showPanduanDialog.value = true;
 	} else if (menuItem === "products") {

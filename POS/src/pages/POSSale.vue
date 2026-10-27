@@ -2944,6 +2944,8 @@ async function handlePaymentCompleted(paymentData) {
 		cartStore.delivery = paymentData.delivery || null;
 		// nextend Treasury: sender/date/reference/proof of a transfer payment
 		cartStore.transfer = paymentData.transfer || null;
+		// nextend Faktur Pajak: the customer asked for a tax invoice (PT notas only)
+		cartStore.faktur = paymentData.faktur || null;
 
 		// Set delivery date for Sales Orders
 		if (paymentData.delivery_date) {
@@ -2982,6 +2984,7 @@ async function handlePaymentCompleted(paymentData) {
 				edited_from: editingOfflineContext?.originalOfflineId || null,
 				...(cartStore.delivery || {}),
 				...(cartStore.transfer || {}),
+				...(cartStore.faktur || {}),
 			};
 			if (cartStore.posOrder) {
 				invoiceData.custom_pos_order = cartStore.posOrder;

@@ -1744,7 +1744,14 @@ export function useInvoice() {
 
 			// Load tax inclusive setting from POS Settings if provided
 			if (posSettings && posSettings.tax_inclusive !== undefined) {
-				taxInclusive.value = posSettings.tax_inclusive || false;
+				taxInclusive.value = Boolean(posSettings.tax_inclusive);
+			}
+
+			// A template whose taxes are all "included in print rate" is inclusive
+			// regardless of POS Settings, matching apply_tax_inclusive on the server
+			const applicable = taxRules.value.filter((t) => t.charge_type !== "Actual");
+			if (applicable.length && applicable.every((t) => t.included_in_print_rate)) {
+				taxInclusive.value = true;
 			}
 
 			// Recalculate all items with new tax rules and tax inclusive setting

@@ -33,6 +33,9 @@ def apply_tax_inclusive(doc):
 
 	This function reads the tax_inclusive setting from POS Settings
 	and applies it to all taxes in the invoice (except Actual charge type).
+	A tax already marked inclusive by its Sales Taxes and Charges Template
+	stays inclusive: POS Settings can only turn inclusion on, never off,
+	otherwise PPN would be added on top of prices that already contain it.
 
 	Args:
 		doc: Sales Invoice document
@@ -61,9 +64,6 @@ def apply_tax_inclusive(doc):
 		# Apply tax inclusive setting
 		if tax_inclusive and not tax.included_in_print_rate:
 			tax.included_in_print_rate = 1
-			has_changes = True
-		elif not tax_inclusive and tax.included_in_print_rate:
-			tax.included_in_print_rate = 0
 			has_changes = True
 
 	# Recalculate if we made changes

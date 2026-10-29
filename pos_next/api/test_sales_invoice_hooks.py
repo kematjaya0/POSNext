@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 
 from pos_next.api.sales_invoice_hooks import (
+	apply_tax_inclusive,
 	auto_assign_loyalty_program_on_invoice,
 	sync_return_loyalty_program,
 )
@@ -87,6 +88,35 @@ class TestSyncReturnLoyaltyProgram(unittest.TestCase):
 		mock_frappe.db.get_value.assert_called_once_with(
 			"Sales Invoice", "ACC-SINV-2026-32482", "loyalty_program"
 		)
+
+
+class TestApplyTaxInclusive(unittest.TestCase):
+	def _invoice_with_tax(self, included_in_print_rate):
+		tax = Mock(charge_type="On Net Total", included_in_print_rate=included_in_print_rate)
+		doc = Mock(pos_profile="Kasir Utama PT")
+		doc.get.return_value = [tax]
+		return doc, tax
+
+	@patch("pos_next.api.sales_invoice_hooks.frappe")
+	def test_keeps_template_inclusive_tax_without_pos_settings(self, mock_frappe):
+		"""TXINVTUP20261029-00001: template PPN included, no POS Settings row, PPN added on top."""
+		mock_frappe.db.get_value.return_value = None
+		doc, tax = self._invoice_with_tax(1)
+
+		apply_tax_inclusive(doc)
+
+		self.assertEqual(tax.included_in_print_rate, 1)
+		doc.calculate_taxes_and_totals.assert_not_called()
+
+	@patch("pos_next.api.sales_invoice_hooks.frappe")
+	def test_pos_settings_makes_exclusive_template_inclusive(self, mock_frappe):
+		mock_frappe.db.get_value.return_value = {"tax_inclusive": 1}
+		doc, tax = self._invoice_with_tax(0)
+
+		apply_tax_inclusive(doc)
+
+		self.assertEqual(tax.included_in_print_rate, 1)
+		doc.calculate_taxes_and_totals.assert_called_once()
 
 
 class TestAutoAssignLoyaltyProgramOnInvoice(unittest.TestCase):

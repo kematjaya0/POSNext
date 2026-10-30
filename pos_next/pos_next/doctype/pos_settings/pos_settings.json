@@ -48,7 +48,6 @@
   "allow_print_draft_invoices",
   "section_break_pricing",
   "decimal_precision",
-  "tax_inclusive",
   "section_break_customer",
   "allow_customer_purchase_order",
   "allow_duplicate_customer_names",
@@ -378,13 +377,6 @@
    "options": "2\n3\n4\n5\n6"
   },
   {
-   "default": "0",
-   "description": "Automatically set taxes as included in item prices. When enabled, displayed prices include tax amounts.",
-   "fieldname": "tax_inclusive",
-   "fieldtype": "Check",
-   "label": "Tax Inclusive"
-  },
-  {
    "collapsible": 1,
    "fieldname": "section_break_customer",
    "fieldtype": "Section Break",
@@ -558,7 +550,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-07 06:25:34.042139",
+ "modified": "2026-10-30 09:00:00.000000",
  "modified_by": "Administrator",
  "module": "POS Next",
  "name": "POS Settings",

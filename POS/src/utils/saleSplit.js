@@ -146,7 +146,8 @@ export function previewWarehousePick(
  *   groups: Array<{company: string, abbr: string, amount: number}>,
  *   company: string,
  *   native: string
- * }} `company` / `native` are the session's own (POS Profile) company / warehouse
+ * }} `company` / `native` are the session's own (POS Profile) company / warehouse;
+ *   a group's `amount` is what its invoice bills before the basket discount
  */
 export function previewSaleSplit(
 	rows,
@@ -190,7 +191,9 @@ export function previewSaleSplit(
 			chunks = row.pos_order_chunks || [{ warehouse: row.warehouse, qty }];
 		}
 
-		const amount = Number(row.amount) || 0;
+		// What the row bills: net + tax, i.e. the price after discount plus any
+		// tax added on top (each company's invoice carries its own PPN)
+		const amount = (Number(row.amount) || 0) + (Number(row.tax_amount) || 0);
 		// Add ons bill with the row's first chunk, as on the server.
 		const addons = (row.addons || []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
 		const withCompany = chunks.map((chunk, index) => {

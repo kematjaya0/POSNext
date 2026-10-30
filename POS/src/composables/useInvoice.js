@@ -48,8 +48,11 @@ export function useInvoice() {
 	const transfer = ref(null);
 	/** nextend Faktur Pajak: { nextend_minta_faktur: 1 } when the customer asked for a tax invoice, null = no */
 	const faktur = ref(null);
-	const taxRules = ref([]); // Tax rules from POS Profile
-	const taxInclusive = ref(false); // Tax inclusive setting from POS Settings
+	// Sales tax rows per company the session bills (get_company_taxes). A row
+	// is taxed by the company its stock is billed to, like the split invoices.
+	const taxRulesByCompany = ref({});
+	const taxCompany = ref(null); // POS Profile company: rows not split elsewhere
+	let taxChunksOf = null; // (item) => [{ company, qty }], set by the cart store
 
 	// Submission state - prevents duplicate submissions
 	const isSubmitting = ref(false);
@@ -174,7 +177,7 @@ export function useInvoice() {
 	}
 
 	const getTaxesResource = createResource({
-		url: "pos_next.api.pos_profile.get_taxes",
+		url: "pos_next.api.pos_profile.get_company_taxes",
 		auto: false,
 	});
 
@@ -194,19 +197,14 @@ export function useInvoice() {
 	// ========================================================================
 	// COMPUTED TOTALS - IMPORTANT: Subtotal uses price_list_rate (original price)
 	// ========================================================================
-	// Formula depends on tax_inclusive mode:
+	// Each tax row of the template is either included in the price or added on
+	// top ("Included in Print Rate"), per company the row is billed to:
 	//
-	// TAX EXCLUSIVE (default):
-	// - Subtotal: Sum of (price_list_rate × quantity) = net amounts
-	// - Tax: Calculated and added on top
-	// - Grand Total = Subtotal - Discount + Tax
+	// - Subtotal: Sum of (price_list_rate × quantity) = prices as sold
+	// - Tax: included tax (extracted from prices, display only) + added tax
+	// - Grand Total = Subtotal - Discount + added tax
 	//
-	// TAX INCLUSIVE:
-	// - Subtotal: Sum of (price_list_rate × quantity) = gross amounts (includes tax)
-	// - Tax: Extracted from prices (for display only)
-	// - Grand Total = Subtotal - Discount (tax already included!)
-	//
-	// This ensures tax is not double-counted in inclusive mode!
+	// This ensures included tax is never counted twice.
 	// ========================================================================
 	// Use roundCurrency for monetary totals to match ERPNext's currency precision (from System Settings)
 	const subtotal = computed(() => roundCurrency(_cachedSubtotal.value));
@@ -214,18 +212,19 @@ export function useInvoice() {
 	const totalDiscount = computed(() =>
 		roundCurrency(_cachedTotalDiscount.value + (additionalDiscount.value || 0))
 	);
+	// Summed from the rows, not kept incrementally: it decides what the
+	// customer pays, so it must never drift from the rows.
+	const addedTax = computed(() =>
+		roundCurrency(
+			invoiceItems.value.reduce(
+				(sum, item) => sum + (item.added_tax_amount || 0) + addonTotals(item).added,
+				0
+			)
+		)
+	);
 	const grandTotal = computed(() => {
 		const discount = _cachedTotalDiscount.value + (additionalDiscount.value || 0);
-
-		if (taxInclusive.value) {
-			// Tax inclusive: Subtotal already includes tax, so don't add it again
-			// Use roundCurrency to match ERPNext's currency precision (from System Settings)
-			return roundCurrency(_cachedSubtotal.value - discount);
-		} else {
-			// Tax exclusive: Add tax on top of subtotal
-			// Use roundCurrency to match ERPNext's currency precision (from System Settings)
-			return roundCurrency(_cachedSubtotal.value + _cachedTotalTax.value - discount);
-		}
+		return roundCurrency(_cachedSubtotal.value + addedTax.value - discount);
 	});
 	const totalPaid = computed(() => _cachedTotalPaid.value);
 
@@ -708,54 +707,81 @@ export function useInvoice() {
 		rebuildIncrementalCache();
 	}
 
-	// Performance: Cache tax calculation to avoid repeated loops
-	let cachedTaxRate = 0;
-	let taxRulesCacheKey = "";
-
-	function calculateTotalTaxRate() {
-		// Create cache key from tax rules
-		const currentKey = JSON.stringify(taxRules.value);
-
-		// Return cached value if tax rules haven't changed
-		if (currentKey === taxRulesCacheKey && cachedTaxRate !== 0) {
-			return cachedTaxRate;
-		}
-
-		// Calculate total tax rate
-		let totalRate = 0;
-		if (taxRules.value && taxRules.value.length > 0) {
-			for (const taxRule of taxRules.value) {
+	// Percent tax rates per company, split by "Included in Print Rate"
+	const taxRatesByCompany = computed(() => {
+		const rates = {};
+		for (const [company, rows] of Object.entries(taxRulesByCompany.value)) {
+			const rate = { included: 0, added: 0 };
+			for (const taxRule of rows || []) {
 				if (
 					taxRule.charge_type === "On Net Total" ||
 					taxRule.charge_type === "On Previous Row Total"
 				) {
-					totalRate += taxRule.rate || 0;
+					rate[taxRule.included_in_print_rate ? "included" : "added"] +=
+						taxRule.rate || 0;
 				}
 			}
+			rates[company] = rate;
 		}
+		return rates;
+	});
 
-		// Cache the result
-		cachedTaxRate = totalRate;
-		taxRulesCacheKey = currentKey;
+	/**
+	 * Tax on a gross amount (price after discount) billed to `company`, as
+	 * ERPNext taxes that company's invoice: included rates are extracted from
+	 * the gross, added rates go on top of the net.
+	 * @returns {{net: number, tax: number, added: number}} `added` = the part of
+	 *   `tax` the customer pays on top of the price
+	 */
+	function taxOnGross(gross, company = taxCompany.value) {
+		const rate = taxRatesByCompany.value[company] || { included: 0, added: 0 };
+		const net = rate.included ? roundCurrency(gross / (1 + rate.included / 100)) : gross;
+		const added = roundCurrency((net * rate.added) / 100);
+		return { net, tax: roundCurrency(gross - net + added), added };
+	}
 
-		return totalRate;
+	/**
+	 * Share of a row billed to each company, from the warehouses its stock
+	 * ships from (the cart store's split preview). The POS Profile company
+	 * takes the whole row when nothing is split.
+	 * @returns {Array<{company: string, share: number}>}
+	 */
+	function rowTaxShares(item) {
+		const qtyByCompany = new Map();
+		for (const chunk of taxChunksOf?.(item) || []) {
+			if (chunk.qty > 0) {
+				qtyByCompany.set(
+					chunk.company,
+					(qtyByCompany.get(chunk.company) || 0) + chunk.qty
+				);
+			}
+		}
+		const total = [...qtyByCompany.values()].reduce((sum, qty) => sum + qty, 0);
+		if (!total) return [{ company: taxCompany.value, share: 1 }];
+		return [...qtyByCompany].map(([company, qty]) => ({ company, share: qty / total }));
+	}
+
+	/**
+	 * Tell the composable which companies a row's stock is billed to.
+	 * @param {(item: Object) => Array<{company: string, qty: number}> | undefined} chunksOf
+	 */
+	function setTaxChunks(chunksOf) {
+		taxChunksOf = chunksOf;
 	}
 
 	/**
 	 * Totals of a line's add ons (Add On Jual - services charged on top of the
 	 * line). Add on amounts are typed by the cashier as the line total (not per
-	 * unit) and follow the same tax mode as items.
+	 * unit) and are taxed like items, by the company of the row's first chunk
+	 * (they bill with it, see split_invoice).
 	 */
 	function addonTotals(item) {
 		const gross = roundCurrency(
 			(item.addons || []).reduce((sum, a) => sum + (Number.parseFloat(a.amount) || 0), 0)
 		);
-		const taxRate = calculateTotalTaxRate();
-		if (!gross || !taxRate) return { subtotal: gross, tax: 0 };
-		if (taxInclusive.value) {
-			return { subtotal: gross, tax: roundCurrency(gross - gross / (1 + taxRate / 100)) };
-		}
-		return { subtotal: gross, tax: roundCurrency((gross * taxRate) / 100) };
+		if (!gross) return { subtotal: gross, tax: 0, added: 0 };
+		const { tax, added } = taxOnGross(gross, rowTaxShares(item)[0].company);
+		return { subtotal: gross, tax, added };
 	}
 
 	/**
@@ -864,7 +890,7 @@ export function useInvoice() {
 	 * 1. Base Amount    = price_list_rate × quantity
 	 * 2. Discount       = Applied based on percentage or fixed amount
 	 * 3. Net Amount     = Base Amount - Discount (may include/exclude tax)
-	 * 4. Tax Amount     = Calculated based on tax_inclusive mode
+	 * 4. Tax Amount     = Per company the row is billed to, by its tax rows
 	 * 5. Final Amount   = Stored in item.amount for backend processing
 	 *
 	 * Important Design Decisions:
@@ -873,9 +899,9 @@ export function useInvoice() {
 	 * - This allows UI to display original prices with clear discount visibility
 	 * - Backend receives calculated net rate (amount/quantity) for accurate totals
 	 *
-	 * Tax Modes:
-	 * - Tax Inclusive: Price includes tax. Extract net = gross / (1 + tax_rate)
-	 * - Tax Exclusive: Tax added on top. Tax = net × tax_rate
+	 * Tax Modes (each tax row of the company's template, see taxOnGross):
+	 * - Included in print rate: Price includes tax. Extract net = gross / (1 + tax_rate)
+	 * - Not included: Tax added on top. Tax = net × tax_rate
 	 *
 	 * @param {Object} item - Invoice item object with quantity, rates, and discount fields
 	 */
@@ -937,25 +963,29 @@ export function useInvoice() {
 		}
 		item.discount_amount = discountAmount;
 
-		// Calculate tax based on inclusive/exclusive mode
+		// Tax per company the row is billed to (a row split across PT/CV is taxed
+		// like the invoices it splits into); the last share takes the rounding.
 		// Use currency precision for all monetary calculations to match ERPNext
-		const totalTaxRate = calculateTotalTaxRate();
+		const grossAmount = roundCurrency(baseAmount - discountAmount);
+		const shares = rowTaxShares(item);
+		let grossLeft = grossAmount;
 		let netAmount = 0;
 		let taxAmount = 0;
-
-		if (taxInclusive.value && totalTaxRate > 0) {
-			// Tax-inclusive: Work backwards from gross to extract net and tax
-			const grossAmount = roundCurrency(baseAmount - discountAmount);
-			netAmount = roundCurrency(grossAmount / (1 + totalTaxRate / 100));
-			taxAmount = roundCurrency(grossAmount - netAmount);
-		} else {
-			// Tax-exclusive: Calculate tax on top of net amount
-			netAmount = roundCurrency(baseAmount - discountAmount);
-			taxAmount = roundCurrency((netAmount * totalTaxRate) / 100);
-		}
+		let addedTaxAmount = 0;
+		shares.forEach(({ company, share }, index) => {
+			const gross =
+				index === shares.length - 1 ? grossLeft : roundCurrency(grossAmount * share);
+			grossLeft = roundCurrency(grossLeft - gross);
+			const part = taxOnGross(gross, company);
+			netAmount += part.net;
+			taxAmount += part.tax;
+			addedTaxAmount += part.added;
+		});
+		netAmount = roundCurrency(netAmount);
 
 		// Update item fields with rounded values
-		item.tax_amount = taxAmount;
+		item.tax_amount = roundCurrency(taxAmount);
+		item.added_tax_amount = roundCurrency(addedTaxAmount); // Paid on top of the price
 		// For manually edited rates, preserve the edited rate; otherwise use price_list_rate
 		if (!isManuallyEdited) {
 			item.rate = effectiveRate; // Preserve original price for display
@@ -966,8 +996,10 @@ export function useInvoice() {
 
 	/**
 	 * Compute the rate to send to ERPNext based on tax mode.
-	 * - Tax-inclusive: gross rate (price - discount, before tax extraction)
-	 * - Tax-exclusive: net rate (amount / qty, after discount)
+	 * - Tax included in the price: gross rate (price - discount, before tax extraction)
+	 * - No included tax: net rate (amount / qty, after discount)
+	 * Both are the price after discount (only rounding differs), so a row split
+	 * across companies with different templates is billed right on each.
 	 */
 	function computeBackendRate(item) {
 		const qty = item.quantity || item.qty || 1;
@@ -978,7 +1010,7 @@ export function useInvoice() {
 				: item.price_list_rate || item.rate || 0;
 		const discountAmount = item.discount_amount || 0;
 
-		if (taxInclusive.value) {
+		if ((item.tax_amount || 0) > (item.added_tax_amount || 0)) {
 			// Gross rate: price minus per-unit discount
 			return roundCurrency(unitPrice - discountAmount / qty);
 		}
@@ -1734,51 +1766,29 @@ export function useInvoice() {
 		}
 	}
 
-	async function loadTaxRules(profileName, posSettings = null) {
+	async function loadTaxRules(profileName) {
 		/**
-		 * Load tax rules from POS Profile and tax inclusive setting from POS Settings
+		 * Load the sales tax rows of every company the session bills. Whether a
+		 * tax is in the price comes from each row's "Included in Print Rate".
 		 */
 		try {
 			const result = await getTaxesResource.submit({ pos_profile: profileName });
-			taxRules.value = result?.data || result || [];
+			const data = result?.data || result || {};
+			taxRulesByCompany.value = data.taxes || {};
+			taxCompany.value = data.company || null;
 
-			// Load tax inclusive setting from POS Settings if provided
-			if (posSettings && posSettings.tax_inclusive !== undefined) {
-				taxInclusive.value = Boolean(posSettings.tax_inclusive);
-			}
-
-			// A template whose taxes are all "included in print rate" is inclusive
-			// regardless of POS Settings, matching apply_tax_inclusive on the server
-			const applicable = taxRules.value.filter((t) => t.charge_type !== "Actual");
-			if (applicable.length && applicable.every((t) => t.included_in_print_rate)) {
-				taxInclusive.value = true;
-			}
-
-			// Recalculate all items with new tax rules and tax inclusive setting
+			// Recalculate all items with the new tax rules
 			invoiceItems.value.forEach((item) => recalculateItem(item));
 
 			// Rebuild cache after bulk operation
 			rebuildIncrementalCache();
 
-			return taxRules.value;
+			return taxRulesByCompany.value;
 		} catch (error) {
 			console.error("Error loading tax rules:", error);
-			taxRules.value = [];
-			return [];
+			taxRulesByCompany.value = {};
+			return {};
 		}
-	}
-
-	function setTaxInclusive(value) {
-		/**
-		 * Set tax inclusive mode and recalculate all items
-		 */
-		taxInclusive.value = value;
-
-		// Recalculate all items with new tax inclusive setting
-		invoiceItems.value.forEach((item) => recalculateItem(item));
-
-		// Rebuild cache after bulk operation
-		rebuildIncrementalCache();
 	}
 
 	return {
@@ -1797,8 +1807,6 @@ export function useInvoice() {
 		delivery,
 		transfer,
 		faktur,
-		taxRules,
-		taxInclusive,
 		isSubmitting,
 
 		// Computed
@@ -1806,6 +1814,7 @@ export function useInvoice() {
 		totalTax,
 		totalDiscount,
 		grandTotal,
+		addedTax,
 		totalPaid,
 		remainingAmount,
 		canSubmit,
@@ -1831,7 +1840,8 @@ export function useInvoice() {
 		clearCart,
 		setDefaultCustomer,
 		loadTaxRules,
-		setTaxInclusive,
+		setTaxChunks,
+		taxOnGross,
 		recalculateItem,
 		rebuildIncrementalCache,
 		formatItemsForSubmission,

@@ -1884,31 +1884,8 @@ onMounted(async () => {
 	});
 
 	// Listen to pricing changes from settings
-	onPricingChanged(async ({ changes }) => {
+	onPricingChanged(({ changes }) => {
 		log.info("Event: Pricing settings changed", changes);
-
-		// Update tax_inclusive setting if it changed
-		if (changes.hasOwnProperty("tax_inclusive")) {
-			const newTaxInclusive = changes.tax_inclusive.new;
-			log.info(
-				`Updating tax_inclusive from ${changes.tax_inclusive.old} to ${newTaxInclusive}`
-			);
-
-			// Update the cart store tax inclusive setting
-			cartStore.setTaxInclusive(newTaxInclusive);
-
-			// Reload tax rules to ensure they're applied with the new setting
-			// This is critical because tax_inclusive affects how taxes are calculated
-			try {
-				log.info("Reloading tax rules with new tax_inclusive setting...");
-				await cartStore.loadTaxRules(shiftStore.currentShift?.pos_profile, {
-					tax_inclusive: newTaxInclusive,
-				});
-				log.info("Tax rules reloaded successfully");
-			} catch (error) {
-				log.error("Failed to reload tax rules:", error);
-			}
-		}
 
 		// Recalculate cart items if there are any
 		if (cartStore.invoiceItems.length > 0) {
@@ -1917,22 +1894,7 @@ onMounted(async () => {
 			});
 			cartStore.rebuildIncrementalCache();
 
-			const message = changes.hasOwnProperty("tax_inclusive")
-				? __("Tax mode updated. Cart recalculated with new tax settings.")
-				: __("Discount settings changed. Cart recalculated.");
-
-			showSuccess(message);
-		} else if (changes.hasOwnProperty("tax_inclusive")) {
-			// Show feedback even if cart is empty
-			showSuccess(
-				changes.tax_inclusive.new
-					? __(
-							"Prices are now tax-inclusive. This will apply to new items added to cart."
-					  )
-					: __(
-							"Prices are now tax-exclusive. This will apply to new items added to cart."
-					  )
-			);
+			showSuccess(__("Discount settings changed. Cart recalculated."));
 		}
 	});
 
@@ -2108,8 +2070,8 @@ onMounted(async () => {
 			timeoutMinutes: posSettingsStore.sessionLockTimeout,
 		});
 
-		// Load tax rules (depends on settings being loaded)
-		await cartStore.loadTaxRules(shiftStore.profileName, posSettingsStore.settings);
+		// Load tax rules of every company the session bills
+		await cartStore.loadTaxRules(shiftStore.profileName);
 
 		_initializedKey = `${shiftStore.profileName}::${shiftStore.currentShift?.name}`;
 	}
@@ -2436,8 +2398,8 @@ async function handleShiftOpened() {
 		timeoutMinutes: posSettingsStore.sessionLockTimeout,
 	});
 
-	// Load tax rules (depends on settings being loaded)
-	await cartStore.loadTaxRules(shiftStore.profileName, posSettingsStore.settings);
+	// Load tax rules of every company the session bills
+	await cartStore.loadTaxRules(shiftStore.profileName);
 
 	_initializedProfile = shiftStore.profileName;
 
@@ -3935,8 +3897,9 @@ async function printInvoices(names) {
 
 /**
  * Temporary offline receipts: one per company the sale bills (saleSplit
- * preview), named `<offline id>-<abbr>`. Totals are shared out by each
- * company's net; the session company's receipt carries the change.
+ * preview), named `<offline id>-<abbr>`. Each receipt carries its own
+ * company's tax; the basket discount is shared out by what each company
+ * bills, and the session company's receipt carries the change.
  */
 function splitOfflineReceipt(doc, preparedItems) {
 	const split = cartStore.saleSplit;
@@ -3945,11 +3908,21 @@ function splitOfflineReceipt(doc, preparedItems) {
 	if (!isSplit) return [doc];
 
 	const groups = splitSubmissionItems(preparedItems, split);
-	const nets = groups.map((group) =>
-		group.items.reduce((sum, row) => sum + (Number(row.qty) || 0) * (Number(row.rate) || 0), 0)
+	// Submitted rates are prices after discount, tax included where the template includes it
+	const taxes = groups.map((group) =>
+		cartStore.taxOnGross(
+			roundCurrency(
+				group.items.reduce(
+					(sum, row) => sum + (Number(row.qty) || 0) * (Number(row.rate) || 0),
+					0
+				)
+			),
+			group.company
+		)
 	);
-	const totalNet = nets.reduce((sum, net) => sum + net, 0) || 1;
-	const totals = nets.map((net) => roundCurrency((doc.grand_total * net) / totalNet));
+	const bills = taxes.map(({ net, tax }) => net + tax);
+	const totalBill = bills.reduce((sum, bill) => sum + bill, 0) || 1;
+	const totals = bills.map((bill) => roundCurrency((doc.grand_total * bill) / totalBill));
 	const othersTotal = totals.slice(1).reduce((sum, total) => sum + total, 0);
 	totals[0] = roundCurrency(doc.grand_total - othersTotal);
 
@@ -3961,9 +3934,7 @@ function splitOfflineReceipt(doc, preparedItems) {
 			company: group.company,
 			items: group.items.map((item) => ({ ...item, quantity: item.qty })),
 			grand_total: totals[index],
-			total_taxes_and_charges: roundCurrency(
-				((doc.total_taxes_and_charges || 0) * nets[index]) / totalNet
-			),
+			total_taxes_and_charges: taxes[index].tax,
 			payments: [],
 			paid_amount: paid,
 			change_amount: index ? 0 : doc.change_amount,

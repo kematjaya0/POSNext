@@ -196,33 +196,57 @@ def get_taxes(pos_profile):
 
 		# Get the POS Profile
 		profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
-		taxes_and_charges = getattr(profile_doc, "taxes_and_charges", None)
-
-		if not taxes_and_charges:
-			return []
-
-		# Get the tax template
-		template_doc = frappe.get_cached_doc("Sales Taxes and Charges Template", taxes_and_charges)
-
-		# Extract tax rows
-		taxes = []
-		for tax_row in template_doc.taxes:
-			taxes.append(
-				{
-					"account_head": tax_row.account_head,
-					"charge_type": tax_row.charge_type,
-					"rate": tax_row.rate,
-					"description": tax_row.description,
-					"included_in_print_rate": getattr(tax_row, "included_in_print_rate", 0),
-					"idx": tax_row.idx,
-				}
-			)
-
-		return taxes
+		return _template_taxes(getattr(profile_doc, "taxes_and_charges", None))
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "Get Taxes Error")
 		# Return empty array instead of throwing - taxes are optional
 		return []
+
+
+@frappe.whitelist()
+def get_company_taxes(pos_profile):
+	"""Tax rows per company a POS session can bill: ``{"company", "taxes": {company: rows}}``.
+
+	A sale split per company (split_invoice) taxes each invoice with its own
+	company's template, so the cart taxes each row the same way. The profile's
+	company takes the POS Profile template, every other company its Default
+	template, as CustomSalesInvoice.set_pos_fields does; pos_tax_template keeps
+	the two equal.
+	"""
+	from pos_next.api.items import get_session_scope
+	from pos_next.overrides.pos_tax_template import default_sales_tax_template
+
+	profile = frappe.get_cached_doc("POS Profile", pos_profile)
+	scope = get_session_scope(profile)
+	warehouses = [*scope["branch"], *scope["outside"]]
+	companies = set(
+		frappe.get_all("Warehouse", filters={"name": ["in", warehouses]}, pluck="company")
+		if warehouses
+		else []
+	)
+	companies.discard(profile.company)
+
+	taxes = {profile.company: _template_taxes(profile.taxes_and_charges)}
+	for company in companies:
+		taxes[company] = _template_taxes(default_sales_tax_template(company))
+	return {"company": profile.company, "taxes": taxes}
+
+
+def _template_taxes(template):
+	"""Rows of a Sales Taxes and Charges Template as the cart reads them."""
+	if not template:
+		return []
+	return [
+		{
+			"account_head": tax_row.account_head,
+			"charge_type": tax_row.charge_type,
+			"rate": tax_row.rate,
+			"description": tax_row.description,
+			"included_in_print_rate": getattr(tax_row, "included_in_print_rate", 0),
+			"idx": tax_row.idx,
+		}
+		for tax_row in frappe.get_cached_doc("Sales Taxes and Charges Template", template).taxes
+	]
 
 
 @frappe.whitelist()

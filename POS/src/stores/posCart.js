@@ -5,7 +5,12 @@ import { usePOSShiftStore } from "@/stores/posShift";
 import { parseError } from "@/utils/errorHandler";
 import { unwrapCouponValidation } from "@/utils/invoice";
 import { shouldValidateItemStock, checkStockAvailability } from "@/utils/stockValidator";
-import { expectedAllocation, needsAllocation, previewSaleSplit } from "@/utils/saleSplit";
+import {
+	expectedAllocation,
+	needsAllocation,
+	previewSaleSplit,
+	saleRowKey,
+} from "@/utils/saleSplit";
 import { offlineState } from "@/utils/offline/offlineState";
 import { useToast } from "@/composables/useToast";
 import { useStockStore } from "@/stores/stock";
@@ -88,12 +93,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		totalTax,
 		totalDiscount,
 		grandTotal,
+		addedTax,
 		posProfile,
 		posOpeningShift,
 		payments,
 		salesTeam,
 		additionalDiscount,
-		taxInclusive,
 		isSubmitting,
 		addItem: addItemToInvoice,
 		removeItem,
@@ -101,7 +106,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		submitInvoice: baseSubmitInvoice,
 		clearCart: clearInvoiceCart,
 		loadTaxRules,
-		setTaxInclusive,
+		setTaxChunks,
+		taxOnGross,
 		setDefaultCustomer,
 		applyDiscount,
 		removeDiscount,
@@ -263,6 +269,24 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	// What the cart shows the sale ships from - sent with the sale (or SPG
 	// order) so the server refuses it when its own allocation differs.
 	const getExpectedAllocation = () => expectedAllocation(invoiceItems.value, saleSplit.value);
+
+	// Tax every row by the company its stock is billed to, as the split
+	// invoices are (a CV row carries no PPN of the PT template). Rows are taxed
+	// again whenever the split moves stock to another company.
+	setTaxChunks((item) => saleSplit.value.rows.get(saleRowKey(item)));
+	watch(
+		() =>
+			JSON.stringify(
+				[...saleSplit.value.rows].map(([key, chunks]) => [
+					key,
+					chunks.map((chunk) => [chunk.company, chunk.qty]),
+				])
+			),
+		() => {
+			invoiceItems.value.forEach((item) => recalculateItem(item));
+			rebuildIncrementalCache();
+		}
+	);
 
 	// The session sells stock of several companies: submit goes straight to the
 	// server split instead of saving a single-company draft first.
@@ -2925,7 +2949,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		payments,
 		salesTeam,
 		additionalDiscount,
-		taxInclusive,
+		addedTax,
 		pendingItem,
 		pendingItemQty,
 		appliedOffers,
@@ -2953,7 +2977,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		setPendingItem,
 		clearPendingItem,
 		loadTaxRules,
-		setTaxInclusive,
+		taxOnGross,
 		submitInvoice,
 		applyDiscountToCart,
 		removeDiscountFromCart,

@@ -13,6 +13,8 @@ from erpnext.accounts.utils import get_account_currency
 from frappe import _
 from frappe.utils import cint, flt
 
+from pos_next.overrides.pos_tax_template import default_sales_tax_template
+
 
 def _find_paid_bundle_row_for_free(si_doc, free_row):
 	"""Pick the paid SI item row whose bundle qty should absorb this free bundle's packed items."""
@@ -123,11 +125,8 @@ def _foreign_company_pos_profile(pos_profile, company):
 			"write_off_account": defaults.write_off_account,
 			"write_off_cost_center": defaults.cost_center,
 			"account_for_change_amount": defaults.default_cash_account,
-			"taxes_and_charges": frappe.db.get_value(
-				"Sales Taxes and Charges Template",
-				{"company": company, "is_default": 1, "disabled": 0},
-				"name",
-			),
+			# The same template the company's own POS Profiles carry (pos_tax_template)
+			"taxes_and_charges": default_sales_tax_template(company),
 			"company_address": get_default_company_address(company),
 			"income_account": None,
 			"expense_account": None,

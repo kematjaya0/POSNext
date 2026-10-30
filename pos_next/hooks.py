@@ -176,7 +176,14 @@ doc_events = {
 		],
 		"after_insert": "pos_next.realtime_events.emit_invoice_created_event",
 	},
-	"POS Profile": {"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event"},
+	"POS Profile": {
+		"validate": "pos_next.overrides.pos_tax_template.validate_pos_profile",
+		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event",
+	},
+	"Sales Taxes and Charges Template": {
+		"validate": "pos_next.overrides.pos_tax_template.validate_template",
+		"on_update": "pos_next.overrides.pos_tax_template.sync_pos_profiles",
+	},
 	"Promotional Scheme": {
 		"before_validate": [
 			"pos_next.promotions.schedule.normalize_schedule_fields",

@@ -2350,26 +2350,21 @@ const totalQuantity = computed(() => {
 });
 
 /**
- * Display subtotal adjusted for tax-inclusive mode.
+ * Display subtotal adjusted for tax included in prices.
  *
- * When tax is inclusive, the raw subtotal from the store includes tax.
- * For clear cashier display, we show:
- * - Subtotal: Net amount (before tax) = gross - tax
- * - Tax: The extracted tax amount
- * - Grand Total: gross amount = Subtotal + Tax
+ * The raw subtotal from the store holds whatever tax the templates include
+ * in the price. For clear cashier display, we show:
+ * - Subtotal: Net amount (before tax) = gross - included tax
+ * - Tax: included tax + tax added on top
+ * - Grand Total: Subtotal + Tax
  *
- * When tax is exclusive, subtotal is already net (before tax).
+ * A sale split per company can hold both kinds (PT included, CV added).
  *
  * @returns {Number} Subtotal amount to display (net amount before tax)
  */
 const displaySubtotal = computed(() => {
-	if (cartStore.taxInclusive) {
-		// Tax inclusive: subtotal from store is gross (includes tax)
-		// Display the net amount (before tax) for clarity
-		return props.subtotal - props.taxAmount;
-	}
-	// Tax exclusive: subtotal is already net (before tax)
-	return props.subtotal;
+	const includedTax = props.taxAmount - cartStore.addedTax;
+	return props.subtotal - includedTax;
 });
 
 /**

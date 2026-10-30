@@ -315,7 +315,6 @@ Display prices in proper local format:
 
 ### Pricing & Discounts
 
-- **Tax Inclusive**: Prices include tax
 - **Max Discount**: Item-level limits
 - **Additional Discount**: Invoice-level
 - **Rounded Totals**: Exact or rounded

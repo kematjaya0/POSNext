@@ -155,6 +155,11 @@ Customer sees:
 
 Prices **ALREADY** include tax. Tax is extracted for reporting.
 
+Which mode applies comes only from the Sales Taxes and Charges Template: a tax row with
+"Included in Print Rate" is inclusive, any other row is added on top. A sale split across
+companies (PT/CV) taxes each row with the template of the company it is billed to, so one
+cart can hold both. The POS Profile always carries its company's Default template.
+
 ```
 Customer sees:
 ┌─────────────────────────────┐
@@ -372,8 +377,7 @@ Press "Complete"              →   "Saved Offline - Will sync later"
 ### Scenario 4: Tax Inclusive Store
 
 ```
-Store Setting: Tax Inclusive = Yes
-Tax Rate: 15%
+Tax template: 15%, "Included in Print Rate" ticked
 
 Cashier Action                    System Response
 ─────────────────────────────────────────────────────────────
@@ -400,9 +404,9 @@ Press "Pay"                   →   Customer pays: $115.00
 
 **Symptoms:** Tax on invoice doesn't match POS display.
 
-**Cause:** Tax mode (inclusive/exclusive) differs between POS and ERPNext settings.
+**Cause:** The POS loaded tax rules before the template changed.
 
-**Solution:** Ensure POS Settings `tax_inclusive` matches your ERPNext tax template configuration.
+**Solution:** Reload the POS. Tax follows the Sales Taxes and Charges Template only ("Included in Print Rate"); there is no separate POS setting.
 
 ### Problem: Offer Not Applied
 

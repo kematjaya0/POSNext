@@ -17,7 +17,6 @@ Note: Some settings are derived from POS Profile as single source of truth:
 POS_SETTINGS_FIELDS = [
 	"name",
 	"enabled",
-	"tax_inclusive",
 	"allow_user_to_edit_additional_discount",
 	"allow_user_to_edit_item_discount",
 	"allow_user_to_edit_rate",
@@ -51,7 +50,6 @@ POS_SETTINGS_FIELDS = [
 # Used when no POS Settings found or on error
 DEFAULT_POS_SETTINGS = {
 	"enabled": 0,
-	"tax_inclusive": 0,
 	"allow_user_to_edit_additional_discount": 0,
 	"allow_user_to_edit_item_discount": 1,
 	"allow_user_to_edit_rate": 0,

@@ -1,3 +1,4 @@
+import qrcode from "qrcode-generator";
 import { call } from "@/utils/apiWrapper";
 import { logger } from "@/utils/logger";
 import { getOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
@@ -193,6 +194,24 @@ function foldAddonRows(items) {
 		});
 }
 
+/**
+ * SVG QR of the receipt number (plain text, so hardware scanners typing into
+ * the search box read it too). Empty for returns, same as the server print.
+ */
+function receiptQrHTML(invoiceData) {
+	if (!invoiceData.name || invoiceData.is_return) return "";
+	const qr = qrcode(0, "L");
+	qr.addData(String(invoiceData.name));
+	qr.make();
+	const svg = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+	const name = String(invoiceData.name).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+	return `
+				<div class="nota-qr" style="text-align: center; margin-top: 8px;">
+					<div style="width: 30mm; margin: 0 auto;">${svg}</div>
+					<div style="font-size: 9px;">${name}</div>
+				</div>`;
+}
+
 export function buildReceiptHTML(invoiceData) {
 	const items = foldAddonRows(invoiceData.items || []);
 	const paidAmount = derivePaidAmount(invoiceData);
@@ -348,12 +367,9 @@ export function buildReceiptHTML(invoiceData) {
 
 				<div class="footer">
 					<div style="margin-bottom: 5px;">${invoiceData.footer || __("Thank you for your business!")}</div>
-					${
-						invoiceData.footer
-							? ""
-							: `<div style="font-size: 10px;">©2026</div>`
-					}
+					${invoiceData.footer ? "" : `<div style="font-size: 10px;">©2026</div>`}
 				</div>
+				${receiptQrHTML(invoiceData)}
 			</div>`;
 }
 

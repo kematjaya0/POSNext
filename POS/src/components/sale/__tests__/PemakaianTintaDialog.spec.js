@@ -33,7 +33,49 @@ const PREVIEW_BAD = {
 	can_submit: false,
 };
 
-function respond(preview, brands = ["NIPPON", "PROPAN", ""]) {
+const MACHINE_FORMAT = {
+	name: "Dulux Colorlab",
+	brand: "DULUX",
+	jenis_proses: "Potong Stok",
+	satuan_mesin: "Shot Dulux",
+};
+const MACHINE_OK = {
+	can_submit: true,
+	errors: [],
+	format: { name: "Dulux Colorlab", brand: "DULUX", jenis_proses: "Potong Stok", versi: 1, satuan_mesin: "Shot Dulux" },
+	columns: [
+		{ header: "DeliveryId", role: "No. Job", used: true },
+		{ header: "Rgb", role: "", used: false },
+	],
+	sample: { headers: ["DeliveryId", "ColorName"], rows: [["826248", "Light Charcoal"]] },
+	counts: { baru: 5, sudah_diimpor: 0, sebelum_mulai: 1, penyesuaian: 0 },
+	periode: { dari: "2026-10-12", sampai: "2026-10-14" },
+	rows: [
+		{
+			row_no: 1,
+			kode: "NO1",
+			item_code: "IMT-NO1",
+			item_name: "Tinta NO1",
+			jumlah_mesin: 605.61,
+			satuan_mesin: "Shot Dulux",
+			faktor: 0.4620937,
+			qty: 279.849,
+			stock_uom: "Mililiter",
+			status: "ok",
+			messages: [],
+		},
+	],
+	summary: { ok: 1, warning: 0, error: 0 },
+	jobs: [
+		{ no_job: "826248", waktu: "2026-10-14 15:36:01", warna: "Light Charcoal", biaya: 18460.99,
+			status_cocok: "Tanpa Nota", sales_invoice: null, hpp_nota: 0, selisih_biaya: 0, job_induk: null },
+	],
+	jobs_total: 5,
+	nota_kurang: [],
+	nota_tanpa_job: [],
+};
+
+function respond(preview, brands = ["NIPPON", "PROPAN", ""], machines = [MACHINE_FORMAT]) {
 	call.mockImplementation(async (method) => {
 		if (method.endsWith("list_uploads"))
 			return [
@@ -41,8 +83,11 @@ function respond(preview, brands = ["NIPPON", "PROPAN", ""]) {
 				{ name: "PMT-0002", status: "Diajukan", rows: 1, pending: 0, can_cancel: true },
 			];
 		if (method.endsWith("get_template_brands")) return brands;
+		if (method.endsWith("tinting_import.api.get_formats")) return machines;
 		if (method.endsWith("preview_upload")) return preview;
 		if (method.endsWith("submit_upload")) return "PMT-0003";
+		if (method.endsWith("tinting_import.api.preview")) return preview;
+		if (method.endsWith("tinting_import.api.submit")) return "IMT-2610-0001";
 	});
 }
 
@@ -56,8 +101,22 @@ async function open() {
 	return wrapper;
 }
 
+function formatSelect(wrapper) {
+	return wrapper.find('select[aria-label="Format"]');
+}
+
 function brandSelect(wrapper) {
-	return wrapper.findAll("select")[1];
+	return wrapper.find('select[aria-label="Brand"]');
+}
+
+async function pickFile(wrapper) {
+	const input = wrapper.find("input[type=file]");
+	Object.defineProperty(input.element, "files", {
+		value: [new File(["x"], "pakai.xlsx")],
+		configurable: true,
+	});
+	await input.trigger("change");
+	await flushPromises();
 }
 
 async function chooseFile(wrapper, { periode = true, brand = "PROPAN" } = {}) {
@@ -67,13 +126,12 @@ async function chooseFile(wrapper, { periode = true, brand = "PROPAN" } = {}) {
 		await dates[0].setValue("2026-09-01");
 		await dates[1].setValue("2026-09-30");
 	}
-	const input = wrapper.find("input[type=file]");
-	Object.defineProperty(input.element, "files", {
-		value: [new File(["x"], "pakai.xlsx")],
-		configurable: true,
-	});
-	await input.trigger("change");
-	await flushPromises();
+	await pickFile(wrapper);
+}
+
+async function chooseMachineFile(wrapper, format = "Dulux Colorlab") {
+	await formatSelect(wrapper).setValue(format);
+	await pickFile(wrapper);
 }
 
 function batalkan(wrapper) {
@@ -204,6 +262,7 @@ describe("PemakaianTintaDialog", () => {
 			"nextend.pemakaian_tinta.cancel_upload",
 			"nextend.pemakaian_tinta.list_uploads",
 			"nextend.pemakaian_tinta.get_template_brands",
+			"nextend.tinting_import.api.get_formats",
 		]);
 		expect(call).toHaveBeenCalledWith("nextend.pemakaian_tinta.cancel_upload", { name: "PMT-0002" });
 	});
@@ -218,5 +277,109 @@ describe("PemakaianTintaDialog", () => {
 		await batalkan(wrapper)[0].trigger("click");
 		await flushPromises();
 		expect(wrapper.text()).toContain("Hanya upload berstatus Diajukan");
+	});
+
+	// -- mesin tinting ------------------------------------------------------
+
+	it("defaults to Template Manual with brand, period and template download", async () => {
+		respond(PREVIEW_OK);
+		const wrapper = await open();
+		const options = formatSelect(wrapper).findAll("option").map((o) => o.text());
+		expect(options[0]).toBe("Template Manual");
+		expect(wrapper.text()).toContain("Download Template");
+		expect(wrapper.findAll("input[type=date]")).toHaveLength(2);
+
+		await chooseFile(wrapper);
+		expect(call).toHaveBeenCalledWith("nextend.pemakaian_tinta.preview_upload", expect.anything());
+		expect(call).not.toHaveBeenCalledWith("nextend.tinting_import.api.preview", expect.anything());
+	});
+
+	it("reads a machine file without brand or period", async () => {
+		respond(MACHINE_OK);
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		expect(wrapper.text()).not.toContain("Download Template");
+		expect(wrapper.findAll("input[type=date]")).toHaveLength(0);
+		expect(call).toHaveBeenCalledWith("nextend.tinting_import.api.preview", {
+			format_name: "Dulux Colorlab",
+			warehouse: "WH B",
+			file_url: "/private/files/pakai.xlsx",
+		});
+	});
+
+	it("shows machine and stock units with the conversion factor", async () => {
+		respond(MACHINE_OK);
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		expect(wrapper.text()).toContain("605.61 Shot Dulux");
+		expect(wrapper.text()).toContain("0.4620937");
+		expect(wrapper.text()).toContain("279.849 Mililiter");
+	});
+
+	it("marks every file column as used or not", async () => {
+		respond(MACHINE_OK);
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		expect(wrapper.text()).toContain("DeliveryId (Diproses: No. Job)");
+		expect(wrapper.text()).toContain("Rgb (Tidak dipakai)");
+	});
+
+	it("blocks a machine file whose rows have errors", async () => {
+		respond({ ...MACHINE_OK, can_submit: false, errors: ["Format file tidak sesuai"] });
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		expect(wrapper.text()).toContain("Format file tidak sesuai");
+		expect(ajukan(wrapper).element.disabled).toBe(true);
+	});
+
+	it("shows a job without nota but still allows submitting", async () => {
+		respond(MACHINE_OK);
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		expect(wrapper.text()).toContain("Tanpa Nota");
+		expect(ajukan(wrapper).element.disabled).toBe(false);
+
+		await ajukan(wrapper).trigger("click");
+		await flushPromises();
+		expect(call).toHaveBeenCalledWith("nextend.tinting_import.api.submit", {
+			format_name: "Dulux Colorlab",
+			warehouse: "WH B",
+			file_url: "/private/files/pakai.xlsx",
+		});
+	});
+
+	it("says a history-only format does not change stock", async () => {
+		respond({
+			...MACHINE_OK,
+			format: { ...MACHINE_OK.format, name: "Avian Dispense", jenis_proses: "Hanya Riwayat" },
+		});
+		const wrapper = await open();
+		await chooseMachineFile(wrapper, "Dulux Colorlab");
+
+		expect(wrapper.text()).toContain("Hanya Riwayat, stok tidak berubah");
+	});
+
+	it("lists a history-only upload without a Batalkan button", async () => {
+		respond(MACHINE_OK);
+		call.mockImplementation(async (method) => {
+			if (method.endsWith("list_uploads"))
+				return [
+					{ name: "IMT-2610-0001", brand: "AVIAN", status: "Tercatat", rows: 2, pending: 0,
+						can_cancel: false, sumber: "File Mesin", periode_dari: "2026-10-14", periode_sampai: "2026-10-14" },
+				];
+			if (method.endsWith("get_template_brands")) return [];
+			if (method.endsWith("tinting_import.api.get_formats")) return [];
+		});
+		const wrapper = await open();
+
+		expect(wrapper.text()).toContain("IMT-2610-0001");
+		expect(wrapper.text()).toContain("Tercatat");
+		expect(wrapper.text()).toContain("2 job mesin");
+		expect(batalkan(wrapper)).toHaveLength(0);
 	});
 });

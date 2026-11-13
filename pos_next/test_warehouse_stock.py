@@ -20,6 +20,7 @@ prefixed `_PNXT_TEST_WHSTOCK_` so it never collides with real records.
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import flt
+from frappe.utils.nestedset import get_root_of
 
 from pos_next.api.items import get_item_warehouse_stock, get_session_stock
 
@@ -151,19 +152,29 @@ class TestGetItemWarehouseStock(FrappeTestCase):
 		# Warehouse Group has no meaningful autoname (random hash) - the label
 		# is just a display field, so look it up by label rather than assume
 		# it doubles as the name.
-		for warehouse in (self.native_warehouse, self.branch_warehouse):
+		for warehouse in (self.native_warehouse, self.branch_warehouse, self.outside_warehouse):
 			frappe.db.set_value("Warehouse", warehouse, "warehouse_group", None)
 		frappe.db.delete("User Warehouse Group", {"parent": TEST_USER})
-		group_name = frappe.db.get_value("Warehouse Group", {"label": WAREHOUSE_GROUP}, "name")
-		if group_name:
-			frappe.delete_doc("Warehouse Group", group_name, force=True, ignore_permissions=True)
+		for label in (WAREHOUSE_GROUP, WAREHOUSE_GROUP + " Outside"):
+			group_name = frappe.db.get_value("Warehouse Group", {"label": label}, "name")
+			if group_name:
+				frappe.delete_doc("Warehouse Group", group_name, force=True, ignore_permissions=True)
 
 	def _join_branch(self):
 		"""Native + branch warehouse in one Warehouse Group the test user is in,
-		then act as that user; the outside warehouse stays ungrouped."""
-		group = frappe.get_doc({"doctype": "Warehouse Group", "label": WAREHOUSE_GROUP}).insert(
-			ignore_permissions=True
-		)
+		then act as that user; the outside WG explicitly shares its Territory."""
+		territory = get_root_of("Territory")
+		outside = frappe.get_doc(
+			{
+				"doctype": "Warehouse Group",
+				"label": WAREHOUSE_GROUP + " Outside",
+				"territory": territory,
+			}
+		).insert(ignore_permissions=True)
+		frappe.db.set_value("Warehouse", self.outside_warehouse, "warehouse_group", outside.name)
+		group = frappe.get_doc(
+			{"doctype": "Warehouse Group", "label": WAREHOUSE_GROUP, "territory": territory}
+		).insert(ignore_permissions=True)
 		for warehouse in (self.native_warehouse, self.branch_warehouse):
 			frappe.db.set_value("Warehouse", warehouse, "warehouse_group", group.name)
 

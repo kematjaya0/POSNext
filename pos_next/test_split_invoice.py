@@ -116,6 +116,8 @@ class TestAllocateRows(unittest.TestCase):
 	def allocate(self, rows, store_first=False, stock=None):
 		stock = stock or {"TOKO": 2, "GUDANG": 10}
 		with (
+			# Territory restrictions are covered by nextend's integration tests.
+			patch.object(split_invoice, "_validate_sale_warehouses"),
 			patch.object(
 				split_invoice,
 				"get_session_scope",

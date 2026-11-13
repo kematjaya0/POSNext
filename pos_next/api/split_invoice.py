@@ -68,6 +68,8 @@ def plan_sale(invoice):
 	# SPG order rows ship from the warehouse the order locked.
 	if not invoice.get("custom_pos_order"):
 		_allocate_rows(items, profile)
+	else:
+		_validate_sale_warehouses(profile, items)
 	if expected is not None:
 		check_allocation(items, expected)
 	for row in items:
@@ -117,6 +119,7 @@ def _allocate_rows(items, profile):
 	the branch joins the end of the order and supplies whatever the branch
 	cannot (its own stock is checked on submit).
 	"""
+	_validate_sale_warehouses(profile, items)
 	scope = get_session_scope(profile)
 	branch = scope["branch"]
 	picked_outside = any(
@@ -162,6 +165,12 @@ def _allocate_rows(items, profile):
 		if row.get("custom_addon_parent_key") in base_warehouse:
 			row["warehouse"] = base_warehouse[row["custom_addon_parent_key"]]
 	items[:] = allocated
+
+
+def _validate_sale_warehouses(profile, items):
+	"""Let installed apps restrict selection without changing allocation."""
+	for hook in frappe.get_hooks("pos_next_validate_sale_warehouses"):
+		frappe.get_attr(hook)(profile.name, items)
 
 
 @frappe.whitelist()

@@ -517,6 +517,7 @@
 								:subtotal="cartStore.subtotal"
 								:tax-amount="cartStore.totalTax"
 								:discount-amount="cartStore.totalDiscount"
+								:additional-discount="cartStore.additionalDiscount"
 								:grand-total="cartStore.grandTotal"
 								:pos-profile="shiftStore.profileName"
 								:company="shiftStore.profileCompany"

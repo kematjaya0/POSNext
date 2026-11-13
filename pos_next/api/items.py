@@ -13,13 +13,11 @@ from frappe.query_builder import functions as fn
 from frappe.query_builder.functions import IfNull
 from frappe.utils import flt, getdate, nowdate
 
-
 # Item group tree resolution is shared with the promotion engine, which matches
 # Pricing Rule item_groups rows against cart lines by lineage.
 from pos_next.promotions.scope import (
 	get_item_group_with_descendants as _get_item_group_with_descendants,
 )
-
 
 ITEM_RESULT_FIELDS = [
 	"name as item_code",
@@ -47,9 +45,8 @@ def _get_item_price_transaction_date(transaction_date=None):
 def _item_price_validity_conditions(ItemPrice, transaction_date=None):
 	"""Match ERPNext get_item_price: only prices valid on transaction_date."""
 	date = _get_item_price_transaction_date(transaction_date)
-	return (
-		(IfNull(ItemPrice.valid_from, "2000-01-01") <= date)
-		& (IfNull(ItemPrice.valid_upto, "2500-12-31") >= date)
+	return (IfNull(ItemPrice.valid_from, "2000-01-01") <= date) & (
+		IfNull(ItemPrice.valid_upto, "2500-12-31") >= date
 	)
 
 
@@ -157,15 +154,20 @@ def get_session_scope(pos_profile_doc):
 	it is a group warehouse), like stock POS.
 	"""
 	native = pos_profile_doc.warehouse
+	uses_nextend = False
 	try:
 		from nextend.warehouse_group import get_session_warehouses
 
 		scope = get_session_warehouses(pos_profile_doc.name)
+		uses_nextend = True
 	except ImportError:
 		scope = {"native": native, "branch": [native] if native else [], "outside": []}
 
 	if native and scope["branch"] == [native] and frappe.db.get_value("Warehouse", native, "is_group"):
-		scope["branch"] = frappe.db.get_descendants("Warehouse", native) or [native]
+		# A mapped Warehouse Group already defines the selling scope. Expanding
+		# its warehouse tree again could bypass the app's Territory restriction.
+		if not uses_nextend or not frappe.db.get_value("Warehouse", native, "warehouse_group"):
+			scope["branch"] = frappe.db.get_descendants("Warehouse", native) or [native]
 	return scope
 
 
@@ -178,9 +180,7 @@ def get_session_warehouses(pos_profile):
 	"""
 	profile = frappe.get_cached_doc("POS Profile", pos_profile)
 	scope = get_session_scope(profile)
-	rows = frappe.get_all(
-		"Warehouse", filters={"name": ["in", scope["branch"]]}, fields=["name", "company"]
-	)
+	rows = frappe.get_all("Warehouse", filters={"name": ["in", scope["branch"]]}, fields=["name", "company"])
 	abbr = dict(
 		frappe.get_all(
 			"Company",

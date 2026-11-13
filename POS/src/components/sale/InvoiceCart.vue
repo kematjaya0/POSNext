@@ -1795,15 +1795,14 @@ import { useCustomerSearchStore } from "@/stores/customerSearch";
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency";
 import { useFormatters } from "@/composables/useFormatters";
 import { useCartSort } from "@/composables/useCartSort";
+import { useSalesApprovalPreview } from "@/composables/useSalesApprovalPreview";
 import { isOffline } from "@/utils/offline";
 import { offlineWorker } from "@/utils/offline/workerClient";
-import { logger } from "@/utils/logger";
 import { addonKey, hasAvailableAddons, isTintable } from "@/utils/itemAddons";
 import { saleRowKey } from "@/utils/saleSplit";
 import { approvalReasonLabel } from "@/utils/salesApproval";
 import { FeatherIcon } from "frappe-ui";
 
-const log = logger.create("InvoiceCart");
 import { createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import EditItemDialog from "./EditItemDialog.vue";
@@ -1901,6 +1900,10 @@ const props = defineProps({
 		type: Number,
 		default: 0,
 	},
+	additionalDiscount: {
+		type: Number,
+		default: 0,
+	},
 	grandTotal: {
 		type: Number,
 		default: 0,
@@ -1925,7 +1928,7 @@ const props = defineProps({
  * ============================================================================
  * SALES APPROVAL PRE-CHECK (nextend)
  * ============================================================================
- * A sale priced below HPP (or whose HPP is unknown) is held for approval at
+ * A discounted sale may be held for approval at
  * submit time. Without this pre-check the cashier only discovers that AFTER taking
  * the customer's money, which is the worst possible moment to find out.
  *
@@ -1933,84 +1936,9 @@ const props = defineProps({
  * the invoice is submitted. If this call fails or the app is absent, checkout
  * behaves exactly as before.
  */
-const EMPTY_APPROVAL_PREVIEW = { needs_approval: false, lines: [], required_role: "" };
-const APPROVAL_CHECK_DEBOUNCE_MS = 400;
-
-const approvalPreview = ref({ ...EMPTY_APPROVAL_PREVIEW });
-let _approvalCheckTimer = null;
-
-const approvalCheckResource = createResource({
-	url: "nextend.sales_approval.pos_next_bridge.check_cart_approval",
-	auto: false,
-});
-
-async function runApprovalCheck() {
-	if (!props.items?.length || isOffline()) {
-		// Offline, the cashier cannot be told anything reliable: the price
-		// list and tier config both live on the server. The sale still goes
-		// through and joins the queue on sync.
-		approvalPreview.value = { ...EMPTY_APPROVAL_PREVIEW };
-		return;
-	}
-
-	try {
-		const payload = props.items.map((item) => ({
-			item_code: item.item_code,
-			qty: item.quantity ?? item.qty ?? 0,
-			rate: item.rate ?? 0,
-			price_list_rate: item.price_list_rate ?? item.rate ?? 0,
-			discount_percentage: item.discount_percentage ?? 0,
-			discount_amount: item.discount_amount ?? 0,
-			pricing_rules: item.pricing_rules ?? null,
-			uom: item.uom ?? null,
-			conversion_factor: item.conversion_factor ?? null,
-			item_name: item.item_name ?? null,
-			// The server allocates the rows over the branch warehouses as submit
-			// will, and judges each company's rows against its own lots.
-			warehouse: item.warehouse ?? null,
-			warehouse_manual: item.warehouse_manual ? 1 : 0,
-			batch_no: item.batch_no ?? null,
-			serial_no: item.serial_no ?? null,
-		}));
-
-		const result = await approvalCheckResource.submit({
-			items: JSON.stringify(payload),
-			pos_profile: props.posProfile,
-			additional_discount: props.discountAmount || 0,
-		});
-
-		approvalPreview.value = result?.message || result || { ...EMPTY_APPROVAL_PREVIEW };
-	} catch (error) {
-		// Advisory only — never block checkout because the hint failed.
-		log.debug("Sales approval pre-check failed:", error);
-		approvalPreview.value = { ...EMPTY_APPROVAL_PREVIEW };
-	}
-}
-
-function scheduleApprovalCheck() {
-	if (_approvalCheckTimer) clearTimeout(_approvalCheckTimer);
-	_approvalCheckTimer = setTimeout(runApprovalCheck, APPROVAL_CHECK_DEBOUNCE_MS);
-}
-
-watch(
-	// Only the figures the tier calculation reads. Watching the whole array
-	// would re-query the server on every unrelated keystroke in the cart.
-	() =>
-		(props.items || [])
-			.map(
-				(i) =>
-					`${i.item_code}:${i.uom}:${i.quantity ?? i.qty}:${i.rate}:${
-						i.price_list_rate
-					}:${i.warehouse}:${i.warehouse_manual ? 1 : 0}`
-			)
-			.join("|") + `#${props.discountAmount || 0}`,
-	scheduleApprovalCheck,
-	{ immediate: true }
+const approvalPreview = useSalesApprovalPreview(props, (items) =>
+	cartStore.formatItemsForSubmission(items)
 );
-
-onBeforeUnmount(() => {
-	if (_approvalCheckTimer) clearTimeout(_approvalCheckTimer);
-});
 
 /**
  * ============================================================================

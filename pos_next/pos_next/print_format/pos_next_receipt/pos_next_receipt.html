@@ -1,0 +1,93 @@
+<style>
+{% include "templates/includes/thermal_receipt.css" %}
+</style>
+
+{%- set currency_symbol = frappe.db.get_value("Currency", doc.currency, "symbol") or doc.currency -%}
+{%- macro money(value) -%}{{ currency_symbol }} {{ frappe.utils.fmt_money(value or 0, precision=0) }}{%- endmacro -%}
+{%- set tax_total = doc.total_taxes_and_charges or 0 -%}
+{%- set additional_discount = (doc.discount_amount or 0)|abs -%}
+
+<div class="receipt">
+	<div class="header">
+		<div class="company-name">{{ doc.company | e }}</div>
+		<div class="receipt-title">Nota Penjualan</div>
+	</div>
+
+	<div class="receipt-meta">
+		<div class="receipt-meta-row"><span class="receipt-meta-label">No. nota</span><span class="receipt-meta-value">{{ doc.name | e }}</span></div>
+		<div class="receipt-meta-row"><span class="receipt-meta-label">Tanggal</span><span class="receipt-meta-value">{{ doc.posting_date }} {{ (doc.posting_time|string).split('.')[0] if doc.posting_time else '' }}</span></div>
+		{%- if doc.customer_name -%}
+		<div class="receipt-meta-row"><span class="receipt-meta-label">Pelanggan</span><span class="receipt-meta-value">{{ doc.customer_name | e }}</span></div>
+		{%- endif -%}
+		{%- if doc.status == "Partly Paid" or (doc.outstanding_amount and doc.outstanding_amount > 0 and doc.outstanding_amount < doc.grand_total) -%}
+		<div class="receipt-meta-row"><span class="receipt-meta-label">Status</span><span class="receipt-meta-value">Pembayaran sebagian</span></div>
+		{%- endif -%}
+	</div>
+
+	<div class="receipt-items">
+	{%- for item in doc.items -%}
+		{%- set list_amount = item.qty * (item.price_list_rate or item.rate or 0) -%}
+		{%- set line_amount = 0 if item.is_free_item else (item.get("amount") if item.get("amount") is not none else item.qty * (item.rate or 0)) -%}
+		{%- set line_discount = [(list_amount|abs) - (line_amount|abs), 0]|max -%}
+		<div class="item-row">
+			{%- set warehouse_name = (item.get("warehouse") or "").rsplit("-", 1)[0].strip() -%}
+			<div class="item-name">{% if warehouse_name %}<span class="item-warehouse">[{{ warehouse_name | e }}]</span> {% endif %}{% if item.custom_addon_parent_key %}+ {% endif %}{{ item.item_name | e }}{% if item.is_free_item %} <span class="item-free">(GRATIS)</span>{% endif %}</div>
+			<div class="receipt-row item-details">
+				<span>{{ item.qty }} × {{ money(item.price_list_rate or item.rate) if not item.is_free_item else 'GRATIS' }}</span>
+				<span>{{ money(line_amount) }}</span>
+			</div>
+			{%- if not item.is_free_item and line_discount > 0 -%}
+			<div class="receipt-row item-discount">
+				<span>Diskon{% if item.discount_percentage %} {{ ("%.2f"|format(item.discount_percentage)).rstrip("0").rstrip(".") }}%{% endif %}</span>
+				<span>-{{ money(line_discount) }}</span>
+			</div>
+			{%- endif -%}
+			{%- if item.serial_no -%}
+			<div class="item-serials">Serial No: {{ item.serial_no | replace("\n", ", ") | e }}</div>
+			{%- endif -%}
+		</div>
+	{%- endfor -%}
+	</div>
+
+	<div class="receipt-totals">
+		<div class="receipt-row"><span>Subtotal</span><span>{{ money(doc.grand_total - tax_total + additional_discount) }}</span></div>
+		{%- if tax_total -%}
+		<div class="receipt-row"><span>Pajak</span><span>{{ money(tax_total) }}</span></div>
+		{%- endif -%}
+		{%- if additional_discount -%}
+		<div class="receipt-row invoice-discount"><span>Diskon tambahan{% if doc.additional_discount_percentage %} {{ "%g"|format(doc.additional_discount_percentage) }}%{% endif %}</span><span>-{{ money(additional_discount) }}</span></div>
+		{%- endif -%}
+		<div class="receipt-row grand-total"><span>TOTAL</span><span>{{ money(doc.grand_total) }}</span></div>
+	</div>
+
+	{%- if doc.payments -%}
+	<div class="receipt-payments">
+		{%- for payment in doc.payments -%}
+		<div class="receipt-row payment-row"><span>{{ payment.mode_of_payment | e }}</span><span>{{ money(payment.amount) }}</span></div>
+		{%- endfor -%}
+		<div class="receipt-row total-paid"><span>Total bayar</span><span>{{ money(doc.paid_amount or 0) }}</span></div>
+		{%- if doc.change_amount and doc.change_amount > 0 -%}
+		<div class="receipt-row"><span>Kembalian</span><span>{{ money(doc.change_amount) }}</span></div>
+		{%- endif -%}
+		{%- if doc.outstanding_amount and doc.outstanding_amount > 0 -%}
+		<div class="receipt-row outstanding-row"><span>Sisa tagihan</span><span>{{ money(doc.outstanding_amount) }}</span></div>
+		{%- endif -%}
+	</div>
+	{%- endif -%}
+
+	<div class="footer">
+		<div class="receipt-thanks">Terima kasih atas kepercayaan anda.</div>
+		<div class="receipt-policy">Barang yang sudah dibeli dapat ditukar di hari yang sama dan tidak bisa dikembalikan.</div>
+	</div>
+</div>
+
+<script>
+{% include "templates/includes/receipt_print_lifecycle.js" %}
+// Run inside the loaded document; popup about:blank listeners do not survive navigation.
+if (/[?&]trigger_print=0(?:&|$)/.test(window.location.search)) {
+	window.addEventListener("load", async function () {
+		if (document.fonts) await document.fonts.ready;
+		window.print();
+	}, { once: true });
+}
+</script>

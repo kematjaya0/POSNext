@@ -45,6 +45,10 @@ function posNextBuildVersionPlugin(version) {
 
 // https://vitejs.dev/config/
 export default defineConfig({
+	test: {
+		// Receipt documents embed the raw CSS, so Vitest must not stub it out.
+		css: { include: [/thermal_receipt\.css/] },
+	},
 	plugins: [
 		posNextBuildVersionPlugin(buildVersion),
 		frappeui({

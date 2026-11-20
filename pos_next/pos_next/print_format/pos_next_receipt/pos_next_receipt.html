@@ -82,11 +82,11 @@
 </div>
 
 <script>
+{% include "templates/includes/receipt_print_lifecycle.js" %}
 // Run inside the loaded document; popup about:blank listeners do not survive navigation.
 if (/[?&]trigger_print=0(?:&|$)/.test(window.location.search)) {
 	window.addEventListener("load", async function () {
 		if (document.fonts) await document.fonts.ready;
-		window.addEventListener("afterprint", function () { window.close(); }, { once: true });
 		window.print();
 	}, { once: true });
 }

@@ -6,6 +6,7 @@ import { getOfflineInvoiceByOfflineId } from "@/utils/offline/sync";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { printHTML as qzPrintHTML } from "@/utils/qzTray";
 import thermalReceiptStyles from "../../../pos_next/templates/includes/thermal_receipt.css?raw";
+import receiptPrintLifecycle from "../../../pos_next/templates/includes/receipt_print_lifecycle.js?raw";
 
 const log = logger.create("PrintInvoice");
 
@@ -273,6 +274,7 @@ function buildReceiptDocumentHTML(invoiceData, { includeControls = false } = {})
 		<body>
 			${buildReceiptHTML(invoiceData)}
 			${controls}
+			${includeControls ? `<script>${receiptPrintLifecycle}</script>` : ""}
 		</body>
 		</html>`;
 }
@@ -545,6 +547,7 @@ function batchDocument(pages, { controls = false } = {}) {
 	</head><body>
 		${controls ? `<div class="invoice-batch-controls"><div>${pages.length} nota: ${names}</div><button data-batch-print disabled onclick="window.print()">Cetak semua nota</button><button onclick="window.close()">Tutup</button></div>` : ""}
 		${pages.map((page) => `<section class="invoice-print-page">${page.html}</section>`).join("\n")}
+		${controls ? `<script>${receiptPrintLifecycle}</script>` : ""}
 	</body></html>`;
 }
 

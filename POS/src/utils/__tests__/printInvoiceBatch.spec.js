@@ -117,7 +117,9 @@ describe("one action prints the complete split sale", () => {
 		expect(pages[0].querySelector(".grand-total > span:last-child").textContent).toBe("Rp 225.000");
 		expect(pages[1].querySelector(".grand-total > span:last-child").textContent).toBe("Rp 90.000");
 		expect(pages[0].querySelector("svg").outerHTML).toBe(new parser().parseFromString(buildReceiptHTML(docs.get("INV-PT")), "text/html").querySelector("svg").outerHTML);
-		expect(html.querySelectorAll("script:not([src])")).toHaveLength(0);
+		expect(html.querySelectorAll("script:not([src])")).toHaveLength(1);
+		expect(html.querySelector("script").textContent).toContain("function closeAfterPrint()");
+		expect(html.querySelector("script").textContent).not.toContain("window.print()");
 		expect(html.querySelectorAll("script[src]")).toHaveLength(0);
 		expect(html.querySelector(".action-banner")).toBeNull();
 		expect(finalHTML()).toContain("break-before: page");

@@ -216,6 +216,7 @@ describe("receipt print dispatch", () => {
 		expect(html).toContain("@page { size: auto; margin: 0; }");
 		expect(html).not.toContain("width: 80mm");
 		expect(html).not.toContain("padding: 5mm");
+		expect(html).toContain("function closeAfterPrint()");
 		const printing = popup.onload();
 		expect(popup.print).not.toHaveBeenCalled();
 		fontsReady();
@@ -248,6 +249,7 @@ describe("receipt print dispatch", () => {
 		await silentPrintInvoiceFromDoc(doc);
 		const [html, , options] = printHTML.mock.calls[0];
 		expect(html).toContain(buildReceiptHTML(doc));
+		expect(html).not.toContain("function closeAfterPrint()");
 		expect(html).toContain("<svg");
 		expect(options).toEqual({
 			usePrinterPageSize: true, printableWidth: 72, scaleContent: false,

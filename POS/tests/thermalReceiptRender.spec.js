@@ -66,7 +66,10 @@ describe.runIf(Boolean(process.env.POS_PRINT_BROWSER))("thermal receipt digital 
 
 	it("prints once after actual popup navigation and font readiness", async () => {
 		const template = readFileSync(path.join(formats, "pos_next_receipt.html"), "utf8");
-		const script = template.match(/<script>[\s\S]*?<\/script>/)[0];
+		const script = template.match(/<script>[\s\S]*?<\/script>/)[0].replace(
+			'{% include "templates/includes/receipt_print_lifecycle.js" %}',
+			readFileSync(path.join(root, "pos_next/templates/includes/receipt_print_lifecycle.js"), "utf8"),
+		);
 		const context = await browser.newContext();
 		const harness = `<script>
 			Object.defineProperty(document, "fonts", {

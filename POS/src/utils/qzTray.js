@@ -224,7 +224,7 @@ export async function findPrinters() {
 /**
  * Send rendered HTML to a printer via QZ Tray pixel printing.
  *
- * @param {string} html - Full HTML document string to print
+ * @param {string|string[]} html - Full HTML document(s), each starting on a new page
  * @param {string} [printerName] - Target printer. Falls back to saved printer.
  * @param {Object} [options] - Extra print options
  * @param {number} [options.width] - Paper width in mm (default 80)
@@ -261,15 +261,13 @@ export async function printHTML(html, printerName, options = {}) {
 		scaleContent: options.scaleContent ?? true,
 	});
 
-	const data = [
-		{
-			type: "pixel",
-			format: "html",
-			flavor: "plain",
-			data: html,
-			...(options.printableWidth ? { options: { pageWidth: options.printableWidth } } : {}),
-		},
-	];
+	const data = (Array.isArray(html) ? html : [html]).map((document) => ({
+		type: "pixel",
+		format: "html",
+		flavor: "plain",
+		data: document,
+		...(options.printableWidth ? { options: { pageWidth: options.printableWidth } } : {}),
+	}));
 
 	try {
 		await qz.print(config, data);

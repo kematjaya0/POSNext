@@ -1190,10 +1190,12 @@
 						<Button
 							variant="solid"
 							theme="blue"
+							:loading="printingInvoices"
+							:disabled="printingInvoices"
 							@click="
-								() => {
-									printInvoices(uiStore.lastInvoiceNames);
-									uiStore.showSuccessDialog = false;
+								async () => {
+									const result = await printInvoices(uiStore.lastInvoiceNames);
+									if (result !== false) uiStore.showSuccessDialog = false;
 								}
 							"
 						>
@@ -1338,6 +1340,7 @@ import {
 	hydrateLocalOnlyInvoice,
 	printInvoice,
 	printInvoiceByName,
+	printInvoiceBatch,
 	printWithSilentFallback,
 } from "@/utils/printInvoice";
 import { qzConnected, connect as qzConnect, disconnect as qzDisconnect } from "@/utils/qzTray";
@@ -3022,7 +3025,7 @@ async function handlePaymentCompleted(paymentData) {
 
 			if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 				try {
-					for (const name of receiptNames) await handlePrintInvoice({ name });
+					await printInvoices(receiptNames, { throwOnError: true });
 					showSuccess(
 						__(
 							"Invoice {0} saved offline and sent to printer — will sync when online",
@@ -3124,12 +3127,13 @@ async function handlePaymentCompleted(paymentData) {
 
 				if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 					try {
-						for (const name of invoiceNames) await handlePrintInvoice({ name });
+						await printInvoices(invoiceNames, { throwOnError: true });
 						showSuccess(
 							__("Invoice {0} created and sent to printer", [invoiceNames.join(" + ")])
 						);
 					} catch (error) {
 						log.error("Auto-print error:", error);
+						uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount);
 						showWarning(
 							__("Invoice {0} created but print failed", [invoiceNames.join(" + ")])
 						);
@@ -3892,8 +3896,25 @@ function handleViewInvoice(invoice) {
 	showInvoiceDetail.value = true;
 }
 
-async function printInvoices(names) {
-	for (const name of names) await handlePrintInvoice({ name });
+const printingInvoices = ref(false);
+
+async function printInvoices(names, { throwOnError = false } = {}) {
+	if (printingInvoices.value) {
+		if (throwOnError) throw new Error(__("Pencetakan sebelumnya masih berlangsung. Silakan coba lagi."));
+		return false;
+	}
+	printingInvoices.value = true;
+	try {
+		if (names.length === 1) return await handlePrintInvoice({ name: names[0] }, { throwOnError });
+		return await printInvoiceBatch(names, { silent: posSettingsStore.silentPrint });
+	} catch (error) {
+		log.error("Batch print failed:", error);
+		window.frappe?.msgprint({ title: __("Cetak nota gagal"), message: __("Semua nota belum berhasil disiapkan untuk dicetak. Silakan cetak ulang seluruh batch."), indicator: "red" });
+		if (throwOnError) throw error;
+		return false;
+	} finally {
+		printingInvoices.value = false;
+	}
 }
 
 /**
@@ -3946,7 +3967,7 @@ function splitOfflineReceipt(doc, preparedItems) {
 }
 
 // Centralized print handler - uses printInvoice.js utilities
-async function handlePrintInvoice(invoiceData) {
+async function handlePrintInvoice(invoiceData, { throwOnError = false } = {}) {
 	try {
 		invoiceData = await hydrateLocalOnlyInvoice(invoiceData || {});
 		const offlineSnapshot = uiStore.lastOfflinePrintDoc;
@@ -3961,6 +3982,7 @@ async function handlePrintInvoice(invoiceData) {
 		// Silent print path — send directly to thermal printer via QZ Tray
 		if (posSettingsStore.silentPrint) {
 			const result = await printWithSilentFallback(invoiceData);
+			if (!result.success) throw new Error(__("Failed to print invoice"));
 			if (result.method === "browser") {
 				log.info("Used browser print fallback");
 			}
@@ -3977,11 +3999,13 @@ async function handlePrintInvoice(invoiceData) {
 		}
 	} catch (error) {
 		log.error("Error printing invoice:", error);
+		if (throwOnError) throw error;
 		window.frappe?.msgprint({
 			title: "Error",
 			message: "Failed to print invoice",
 			indicator: "red",
 		});
+		return false;
 	}
 }
 

@@ -15,6 +15,16 @@ import { printHTML } from "@/utils/qzTray";
 describe("QZ HTML geometry", () => {
 	beforeEach(() => vi.clearAllMocks());
 
+	it("sends a split sale as two ordered HTML records in one print request", async () => {
+		await printHTML(["<p>PT</p>", "<p>CV</p>"], "Epson", { printableWidth: 72, scaleContent: false, usePrinterPageSize: true });
+		expect(qz.print).toHaveBeenCalledOnce();
+		const [config, data] = qz.print.mock.calls[0];
+		expect(data.map((record) => record.data)).toEqual(["<p>PT</p>", "<p>CV</p>"]);
+		expect(data.every((record) => record.format === "html" && record.options.pageWidth === 72)).toBe(true);
+		expect(config.options.scaleContent).toBe(false);
+		expect(config.options.rasterize).toBe(false);
+	});
+
 	it("uses the existing page defaults for other print formats", async () => {
 		await printHTML("<p>Test</p>", "Other Printer");
 		expect(qz.configs.create).toHaveBeenCalledWith("Other Printer", expect.objectContaining({

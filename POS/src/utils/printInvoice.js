@@ -514,3 +514,172 @@ export function printInvoiceCustom(invoiceData) {
 	flagOfflineInvoicePrinted(invoiceData?.name);
 	return true;
 }
+
+// ============================================================================
+// Split-sale printing: prepare every receipt, then dispatch the complete batch.
+// ============================================================================
+
+function batchWindow() {
+	const popup = window.open("", "_blank", "width=800,height=600");
+	if (!popup) throw new Error(__("Popup blocked — check your browser settings."));
+	popup.document.write("<!doctype html><html><head><meta charset='utf-8'><title>Menyiapkan nota</title></head><body>Menyiapkan semua nota untuk dicetak…</body></html>");
+	popup.document.close();
+	return popup;
+}
+
+function batchDocument(pages, { controls = false } = {}) {
+	const origin = `${window.location.origin}/`;
+	const styles = [...new Set(pages.flatMap((page) => page.styles))].join("\n");
+	const names = pages.map((page) => escapeReceiptText(page.name)).join(" + ");
+	return `<!doctype html><html><head><meta charset="utf-8">
+		<base href="${escapeReceiptText(origin)}"><title>${names}</title>
+		${styles}
+		<style>
+			.invoice-batch-controls { padding: 12px 0; font: 12px Arial, sans-serif; }
+			.invoice-batch-controls button { margin: 8px 4px 0 0; padding: 6px 10px; }
+			@media print {
+				.invoice-batch-controls { display: none !important; }
+				.invoice-print-page + .invoice-print-page { break-before: page; page-break-before: always; }
+			}
+		</style>
+	</head><body>
+		${controls ? `<div class="invoice-batch-controls"><div>${pages.length} nota: ${names}</div><button data-batch-print disabled onclick="window.print()">Cetak semua nota</button><button onclick="window.close()">Tutup</button></div>` : ""}
+		${pages.map((page) => `<section class="invoice-print-page">${page.html}</section>`).join("\n")}
+	</body></html>`;
+}
+
+async function prepareBatchReceipt(name, settingsCache) {
+	try {
+		if (isLocalOnlyInvoiceName(name)) {
+			const doc = await hydrateLocalOnlyInvoice({ name });
+			if (!doc.items?.length) throw new Error("Offline receipt not found");
+			return { name, format: DEFAULT_PRINT_FORMAT, html: buildReceiptHTML(doc), styles: [`<style>${RECEIPT_STYLES}</style>`], scripts: [] };
+		}
+		const doc = await call("pos_next.api.invoices.get_invoice", { invoice_name: name });
+		if (!doc) throw new Error("Invoice not found");
+		const key = doc.pos_profile || "";
+		if (!settingsCache.has(key)) settingsCache.set(key, resolvePrintSettings(doc.pos_profile));
+		const settings = await settingsCache.get(key);
+		const params = new URLSearchParams({
+			doctype: doc.doctype || "Sales Invoice", name, format: settings.printFormat,
+			no_letterhead: settings.letterhead ? "0" : "1", _lang: "en", trigger_print: "0",
+		});
+		if (settings.letterhead) params.set("letterhead", settings.letterhead);
+		// Use the same printview as single printing: before_print hooks, copy
+		// banners, company letterheads, fonts and barcode assets stay intact.
+		const response = await fetch(`/printview?${params}`, { credentials: "same-origin" });
+		if (!response.ok || response.redirected) throw new Error("Could not load printview");
+		const parsed = new DOMParser().parseFromString(await response.text(), "text/html");
+		const receipt = parsed.querySelector(".print-format");
+		if (!receipt) throw new Error("Printview did not contain a receipt");
+		const sources = [...parsed.head.querySelectorAll("script[src]")]
+			.map((node) => node.getAttribute("src"))
+			.filter((src) => src.includes("print.bundle"));
+		// A template's own auto-print/auto-close script must never run once
+		// per invoice. The batch owns the one load -> print lifecycle.
+		for (const script of parsed.querySelectorAll("script")) script.remove();
+		const styles = [...parsed.head.querySelectorAll('style, link[rel="stylesheet"]')]
+			.map((node) => node.outerHTML);
+		return { name, format: settings.printFormat, html: receipt.outerHTML, styles, scripts: sources, barcodes: Boolean(receipt.querySelector("svg[data-barcode-value]")) };
+	} catch (error) {
+		log.error(`Could not prepare receipt ${name}:`, error);
+		throw new Error(__("Gagal menyiapkan nota {0}. Belum ada nota dalam batch ini yang dicetak.", [name]));
+	}
+}
+
+async function renderBatchBarcodes(popup, pages) {
+	const barcodes = popup.document.querySelectorAll("svg[data-barcode-value]");
+	if (!barcodes.length) return;
+	if (typeof popup.render_barcode !== "function" && typeof window.render_barcode !== "function") {
+		// A document rewritten through another window can stall script loads.
+		// Load Frappe's renderer on the POS window and pass it the popup's SVGs.
+		for (const src of new Set(pages.flatMap((page) => page.scripts))) {
+			await new Promise((resolve, reject) => {
+				const script = window.document.createElement("script");
+				script.src = new URL(src, `${window.location.origin}/`).href;
+				script.onload = resolve;
+				script.onerror = () => reject(new Error(__("Barcode belum siap. Silakan cetak ulang semua nota.")));
+				window.document.head.appendChild(script);
+			});
+		}
+	}
+	const renderer = popup.render_barcode || window.render_barcode;
+	if (typeof renderer !== "function") {
+		throw new Error(__("Barcode belum siap. Silakan cetak ulang semua nota."));
+	}
+	for (const barcode of barcodes) renderer(barcode);
+}
+
+function printBatchWindow(popup, pages) {
+	let closedPoll;
+	return new Promise((resolve, reject) => {
+		if (popup.closed) return reject(new Error(__("Jendela cetak sudah ditutup. Silakan cetak ulang semua nota.")));
+		closedPoll = setInterval(() => {
+			if (popup.closed) reject(new Error(__("Jendela cetak sudah ditutup. Silakan cetak ulang semua nota.")));
+		}, 250);
+		popup.document.open();
+		popup.document.write(batchDocument(pages, { controls: true }));
+		popup.onload = async () => {
+			try {
+				await renderBatchBarcodes(popup, pages);
+				await popup.document.fonts?.ready;
+				if (popup.closed) throw new Error(__("Jendela cetak sudah ditutup."));
+				popup.print();
+				if (!popup.closed) popup.document.querySelector("[data-batch-print]")?.removeAttribute("disabled");
+				resolve();
+			} catch (error) {
+				reject(error);
+			}
+		};
+		popup.document.close();
+	}).finally(() => clearInterval(closedPoll));
+}
+
+/** One cashier action for every invoice of a PT/CV split sale. */
+export async function printInvoiceBatch(invoiceNames, { silent = false } = {}) {
+	if (!Array.isArray(invoiceNames)) throw new Error(__("Daftar nota untuk dicetak tidak valid."));
+	const names = [...new Set(invoiceNames)];
+	if (!names.length || names.some((name) => typeof name !== "string" || !name)) {
+		throw new Error(__("Daftar nota untuk dicetak tidak valid."));
+	}
+	// Reserve the browser window before awaiting requests, while the cashier's
+	// click still has user activation. Never open one popup per invoice.
+	let popup = silent ? null : batchWindow();
+	try {
+		const settingsCache = new Map();
+		const pages = await Promise.all(names.map((name) => prepareBatchReceipt(name, settingsCache)));
+		if (new Set(pages.map((page) => page.format)).size !== 1) {
+			throw new Error(__("Nota dengan format cetak berbeda belum dapat dicetak bersama."));
+		}
+		// Dynamic Frappe barcodes need print.bundle's renderer. Use the browser
+		// for these formats rather than sending empty SVG placeholders to QZ.
+		if (silent && pages.some((page) => page.barcodes)) popup = batchWindow();
+		else if (silent) {
+			try {
+				// QZ starts each HTML record on its own page; do not rely on its
+				// JavaFX renderer honoring browser CSS page breaks.
+				const documents = pages.map((page) => batchDocument([page]));
+				if (pages[0].format === DEFAULT_PRINT_FORMAT) {
+					await qzPrintHTML(documents, undefined, THERMAL_RECEIPT_OPTIONS);
+				} else {
+					await qzPrintHTML(documents);
+				}
+				for (const name of names) flagOfflineInvoicePrinted(name);
+				return { method: "silent", success: true };
+			} catch (error) {
+				log.warn("Silent batch failed, opening one browser print window:", error);
+				popup = batchWindow();
+			}
+		}
+		await printBatchWindow(popup, pages);
+		for (const name of names) flagOfflineInvoicePrinted(name);
+		return { method: "browser", success: true };
+	} catch (error) {
+		if (popup && !popup.closed) {
+			popup.document.open();
+			popup.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Cetak nota gagal</title></head><body><p>${escapeReceiptText(error.message)}</p><p>Silakan cetak ulang semua nota: ${names.map(escapeReceiptText).join(" + ")}</p></body></html>`);
+			popup.document.close();
+		}
+		throw error;
+	}
+}

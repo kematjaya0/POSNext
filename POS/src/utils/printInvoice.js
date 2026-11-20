@@ -5,10 +5,21 @@ import { getOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache";
 import { getOfflineInvoiceByOfflineId } from "@/utils/offline/sync";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { printHTML as qzPrintHTML } from "@/utils/qzTray";
+import thermalReceiptStyles from "../../../pos_next/templates/includes/thermal_receipt.css?raw";
 
 const log = logger.create("PrintInvoice");
 
 const DEFAULT_PRINT_FORMAT = "POS Next Receipt";
+const THERMAL_RECEIPT_OPTIONS = {
+	usePrinterPageSize: true,
+	printableWidth: 72,
+	scaleContent: false,
+};
+
+async function printWhenReady(printWindow) {
+	await printWindow.document.fonts?.ready;
+	if (!printWindow.closed) printWindow.print();
+}
 
 // ============================================================================
 // Shared helpers
@@ -112,48 +123,7 @@ export async function hydrateLocalOnlyInvoice(invoiceData) {
 	return invoiceData;
 }
 
-const RECEIPT_STYLES = `
-	* { margin: 0; padding: 0; box-sizing: border-box; }
-	body {
-		font-family: 'Courier New', monospace;
-		padding: 10px; width: 80mm; margin: 0; max-width: 80mm;
-		font-weight: bold; color: black;
-	}
-	.receipt { width: 100%; }
-	.header { text-align: center; margin-bottom: 20px; border-bottom: 2px dashed #000; padding-bottom: 10px; }
-	.company-name { font-size: 18px; font-weight: bold; margin-bottom: 5px; }
-	.invoice-info { margin-bottom: 15px; font-size: 12px; }
-	.invoice-info div { display: flex; justify-content: space-between; margin-bottom: 3px; }
-	.partial-status { color: #000; font-weight: bold; margin-bottom: 5px; }
-	.items-table { width: 100%; margin-bottom: 15px; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 10px 0; }
-	.item-row { margin-bottom: 10px; font-size: 12px; }
-	.item-name { font-weight: bold; margin-bottom: 3px; }
-	.item-details { display: flex; justify-content: space-between; font-size: 11px; }
-	.item-discount { display: flex; justify-content: space-between; font-size: 10px; margin-top: 2px; }
-	.item-serials { font-size: 9px; margin-top: 3px; padding: 3px 5px; border: 1px dashed #000; border-radius: 2px; }
-	.item-serials-label { font-weight: bold; margin-bottom: 2px; }
-	.item-serials-list { word-break: break-all; }
-	.totals { margin-top: 15px; border-top: 1px dashed #000; padding-top: 10px; }
-	.total-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 12px; }
-	.grand-total { font-size: 16px; font-weight: bold; border-top: 2px solid #000; padding-top: 10px; margin-top: 10px; }
-	.payments { margin-top: 15px; border-top: 1px dashed #000; padding-top: 10px; }
-	.payment-row { display: flex; justify-content: space-between; margin-bottom: 3px; font-size: 11px; }
-	.total-paid { font-weight: bold; border-top: 1px solid #000; padding-top: 5px; margin-top: 5px; }
-	.outstanding-row {
-		display: flex; justify-content: space-between; font-size: 13px; font-weight: bold;
-		border: 1px solid #000; padding: 8px; margin-top: 8px; border-radius: 4px;
-	}
-	.offline-badge {
-		text-align: center; font-size: 11px; font-weight: bold;
-		border: 1px dashed #000; padding: 4px; margin-bottom: 10px;
-	}
-	.footer { text-align: center; margin-top: 20px; padding-top: 10px; border-top: 2px dashed #000; font-size: 11px; }
-	@media print {
-		@page { size: 80mm auto; margin: 0; }
-		body { width: 80mm; padding: 5mm; margin: 0; }
-		.no-print { display: none; }
-	}
-`;
+const RECEIPT_STYLES = thermalReceiptStyles;
 
 /**
  * Inner receipt HTML (no shell). Used for local/offline invoices and QZ Tray.
@@ -184,6 +154,7 @@ function foldAddonRows(items) {
 				: item.price_list_rate;
 			return {
 				...item,
+				amount: item.amount != null ? Number(item.amount) + extra : undefined,
 				rate,
 				price_list_rate: priceListRate,
 				discount_percentage:
@@ -212,165 +183,71 @@ function receiptQrHTML(invoiceData) {
 				</div>`;
 }
 
+function escapeReceiptText(value) {
+	return String(value ?? "").replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
 export function buildReceiptHTML(invoiceData) {
 	const items = foldAddonRows(invoiceData.items || []);
 	const paidAmount = derivePaidAmount(invoiceData);
-	const itemsHtml = items
-		.map((item) => {
-			const hasDiscount =
-				(item.discount_percentage && Number.parseFloat(item.discount_percentage) > 0) ||
-				(item.discount_amount && Number.parseFloat(item.discount_amount) > 0);
-			const isFree = item.is_free_item;
-			const qty = item.quantity || item.qty || 0;
-			const displayRate = item.price_list_rate || item.rate || 0;
-			const subtotal = qty * displayRate;
-			return `
-						<div class="item-row">
-							<div class="item-name">${item.item_name || item.item_code} ${isFree ? __("(FREE)") : ""}</div>
-							<div class="item-details">
-								<span>${qty} × ${formatCurrency(displayRate)}</span>
-								<span><strong>${formatCurrency(subtotal)}</strong></span>
-							</div>
-							${
-								hasDiscount
-									? `<div class="item-discount"><span>Discount ${
-											item.discount_percentage
-												? `(${Number(item.discount_percentage).toFixed(
-														2
-												  )}%)`
-												: ""
-									  }</span><span>-${formatCurrency(
-											item.discount_amount || 0
-									  )}</span></div>`
-									: ""
-							}
-							${
-								item.serial_no
-									? `<div class="item-serials"><div class="item-serials-label">${__(
-											"Serial No:"
-									  )}</div><div class="item-serials-list">${String(
-											item.serial_no
-									  ).replace(/\n/g, ", ")}</div></div>`
-									: ""
-							}
-						</div>`;
-		})
-		.join("");
+	const taxTotal = Number(invoiceData.total_taxes_and_charges) || 0;
+	const additionalDiscount = Math.abs(Number(invoiceData.discount_amount) || 0);
+	const itemsHtml = items.map((item) => {
+		const qty = item.quantity ?? item.qty ?? 0;
+		const isFree = item.is_free_item;
+		const displayRate = Number(item.price_list_rate || item.rate) || 0;
+		// amount/rate already include the item discount. net_amount may also
+		// include invoice-wide discounts, so it must not be used here.
+		const amount = isFree ? 0 : Number(item.amount ?? (Number(item.rate ?? displayRate) * qty));
+		const discount = Math.max(0, Math.abs(qty * displayRate) - Math.abs(amount));
+		const percentage = Number(Number(item.discount_percentage || 0).toFixed(2));
+		const warehouseName = String(item.warehouse || "").replace(/-[^-]*$/, "").trim();
+		const warehouse = warehouseName
+			? `<span class="item-warehouse">[${escapeReceiptText(warehouseName)}]</span> ` : "";
+		return `<div class="item-row">
+			<div class="item-name">${warehouse}${escapeReceiptText(item.item_name || item.item_code)}${isFree ? ' <span class="item-free">(GRATIS)</span>' : ""}</div>
+			<div class="receipt-row item-details"><span>${escapeReceiptText(qty)} × ${isFree ? "GRATIS" : formatCurrency(displayRate)}</span><span>${formatCurrency(amount)}</span></div>
+			${!isFree && discount > 0 ? `<div class="receipt-row item-discount"><span>Diskon${percentage ? ` ${percentage}%` : ""}</span><span>-${formatCurrency(discount)}</span></div>` : ""}
+			${item.serial_no ? `<div class="item-serials">Serial No: ${escapeReceiptText(String(item.serial_no).replace(/\n/g, ", "))}</div>` : ""}
+		</div>`;
+	}).join("");
+	const postingDate = invoiceData.posting_date || new Date().toLocaleDateString("id-ID");
+	const postingTime = invoiceData.posting_time ? ` ${String(invoiceData.posting_time).split(".")[0]}` : "";
+	const customer = invoiceData.customer_name || invoiceData.customer;
+	const partlyPaid = invoiceData.status === "Partly Paid" ||
+		(invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total);
 
-	return `
-			<div class="receipt">
-				<div class="header">
-					<div class="company-name">${invoiceData.company || "POS Next"}</div>
-					<div style="font-size: 12px;">${invoiceData.header || __("TAX INVOICE")}</div>
-				</div>
-
-				${invoiceData.is_offline ? `<div class="offline-badge">${__("OFFLINE — PENDING SYNC")}</div>` : ""}
-
-				<div class="invoice-info">
-					<div><span>${__("Invoice #:")}</span><span><strong>${invoiceData.name}</strong></span></div>
-					<div><span>${__("Date:")}</span><span>${new Date(
-		invoiceData.posting_date || Date.now()
-	).toLocaleString()}</span></div>
-					${
-						invoiceData.customer_name || invoiceData.customer
-							? `<div><span>${__("Customer:")}</span><span>${
-									invoiceData.customer_name || invoiceData.customer
-							  }</span></div>`
-							: ""
-					}
-					${
-						invoiceData.status === "Partly Paid" ||
-						(invoiceData.outstanding_amount &&
-							invoiceData.outstanding_amount > 0 &&
-							invoiceData.outstanding_amount < invoiceData.grand_total)
-							? `<div class="partial-status"><span>${__("Status:")}</span><span>${__(
-									"PARTIAL PAYMENT"
-							  )}</span></div>`
-							: ""
-					}
-				</div>
-
-				<div class="items-table">
-					${itemsHtml}
-				</div>
-
-				<div class="totals">
-					${
-						invoiceData.total_taxes_and_charges &&
-						invoiceData.total_taxes_and_charges > 0
-							? `
-					<div class="total-row"><span>${__("Subtotal:")}</span><span>${formatCurrency(
-									(invoiceData.grand_total || 0) -
-										(invoiceData.total_taxes_and_charges || 0)
-							  )}</span></div>
-					<div class="total-row"><span>${__("Tax:")}</span><span>${formatCurrency(
-									invoiceData.total_taxes_and_charges
-							  )}</span></div>`
-							: ""
-					}
-					${
-						invoiceData.discount_amount
-							? `
-					<div class="total-row" style="color: #28a745;"><span>Additional Discount${
-						invoiceData.additional_discount_percentage
-							? ` (${Number(invoiceData.additional_discount_percentage).toFixed(
-									1
-							  )}%)`
-							: ""
-					}:</span><span>-${formatCurrency(
-									Math.abs(invoiceData.discount_amount)
-							  )}</span></div>`
-							: ""
-					}
-					<div class="total-row grand-total"><span>${__("TOTAL:")}</span><span>${formatCurrency(
-		invoiceData.grand_total
-	)}</span></div>
-				</div>
-
-				${
-					invoiceData.payments && invoiceData.payments.length > 0
-						? `
-				<div class="payments">
-					<div style="font-weight: bold; margin-bottom: 5px; font-size: 12px;">${__("Payments:")}</div>
-					${invoiceData.payments
-						.map(
-							(p) =>
-								`<div class="payment-row"><span>${
-									p.mode_of_payment
-								}:</span><span>${formatCurrency(p.amount)}</span></div>`
-						)
-						.join("")}
-					<div class="payment-row total-paid"><span>${__("Total Paid:")}</span><span>${formatCurrency(
-								paidAmount
-						  )}</span></div>
-					${
-						invoiceData.change_amount && invoiceData.change_amount > 0
-							? `<div class="payment-row" style="font-weight: bold; margin-top: 5px;"><span>${__(
-									"Change:"
-							  )}</span><span>${formatCurrency(
-									invoiceData.change_amount
-							  )}</span></div>`
-							: ""
-					}
-					${
-						invoiceData.outstanding_amount && invoiceData.outstanding_amount > 0
-							? `<div class="outstanding-row"><span>${__(
-									"BALANCE DUE:"
-							  )}</span><span>${formatCurrency(
-									invoiceData.outstanding_amount
-							  )}</span></div>`
-							: ""
-					}
-				</div>`
-						: ""
-				}
-
-				<div class="footer">
-					<div style="margin-bottom: 5px;">${invoiceData.footer || __("Thank you for your business!")}</div>
-					${invoiceData.footer ? "" : `<div style="font-size: 10px;">©2026</div>`}
-				</div>
-				${receiptQrHTML(invoiceData)}
-			</div>`;
+	return `<div class="receipt">
+		<div class="header">
+			<div class="company-name">${escapeReceiptText(invoiceData.company || "POS Next")}</div>
+			<div class="receipt-title">${escapeReceiptText(invoiceData.header || "Nota Penjualan")}</div>
+		</div>
+		${invoiceData.is_offline ? '<div class="offline-badge">OFFLINE — PENDING SYNC</div>' : ""}
+		<div class="receipt-meta">
+			<div class="receipt-meta-row"><span class="receipt-meta-label">No. nota</span><span class="receipt-meta-value">${escapeReceiptText(invoiceData.name)}</span></div>
+			<div class="receipt-meta-row"><span class="receipt-meta-label">Tanggal</span><span class="receipt-meta-value">${escapeReceiptText(postingDate + postingTime)}</span></div>
+			${customer ? `<div class="receipt-meta-row"><span class="receipt-meta-label">Pelanggan</span><span class="receipt-meta-value">${escapeReceiptText(customer)}</span></div>` : ""}
+			${partlyPaid ? '<div class="receipt-meta-row"><span class="receipt-meta-label">Status</span><span class="receipt-meta-value">Pembayaran sebagian</span></div>' : ""}
+		</div>
+		<div class="receipt-items">${itemsHtml}</div>
+		<div class="receipt-totals">
+			<div class="receipt-row"><span>Subtotal</span><span>${formatCurrency((Number(invoiceData.grand_total) || 0) - taxTotal + additionalDiscount)}</span></div>
+			${taxTotal ? `<div class="receipt-row"><span>Pajak</span><span>${formatCurrency(taxTotal)}</span></div>` : ""}
+			${additionalDiscount ? `<div class="receipt-row invoice-discount"><span>Diskon tambahan${invoiceData.additional_discount_percentage ? ` ${Number(invoiceData.additional_discount_percentage)}%` : ""}</span><span>-${formatCurrency(additionalDiscount)}</span></div>` : ""}
+			<div class="receipt-row grand-total"><span>TOTAL</span><span>${formatCurrency(invoiceData.grand_total)}</span></div>
+		</div>
+		${invoiceData.payments?.length ? `<div class="receipt-payments">
+			${invoiceData.payments.map((p) => `<div class="receipt-row payment-row"><span>${escapeReceiptText(p.mode_of_payment)}</span><span>${formatCurrency(p.amount)}</span></div>`).join("")}
+			<div class="receipt-row total-paid"><span>Total bayar</span><span>${formatCurrency(paidAmount)}</span></div>
+			${invoiceData.change_amount > 0 ? `<div class="receipt-row"><span>Kembalian</span><span>${formatCurrency(invoiceData.change_amount)}</span></div>` : ""}
+			${invoiceData.outstanding_amount > 0 ? `<div class="receipt-row outstanding-row"><span>Sisa tagihan</span><span>${formatCurrency(invoiceData.outstanding_amount)}</span></div>` : ""}
+		</div>` : ""}
+		<div class="footer">
+			<div class="receipt-thanks">Terima kasih atas kepercayaan anda.</div>
+			<div class="receipt-policy">Barang yang sudah dibeli dapat ditukar di hari yang sama dan tidak bisa dikembalikan.</div>
+		</div>
+		${receiptQrHTML(invoiceData)}
+	</div>`;
 }
 
 function buildReceiptDocumentHTML(invoiceData, { includeControls = false } = {}) {
@@ -433,7 +310,7 @@ async function resolvePrintSettings(posProfile, printFormat, letterhead) {
 
 /**
  * Open Frappe's /printview in a new browser window.
- * The page includes trigger_print=1 so the OS print dialog appears automatically.
+ * The thermal template waits for load/fonts itself. Other formats use Frappe's trigger.
  * Falls back to the hardcoded receipt template if the popup is blocked.
  */
 export async function printInvoice(invoiceData, printFormat = null, letterhead = null) {
@@ -461,7 +338,7 @@ export async function printInvoice(invoiceData, printFormat = null, letterhead =
 			format,
 			no_letterhead: letterhead ? 0 : 1,
 			_lang: "en",
-			trigger_print: 1,
+			trigger_print: format === DEFAULT_PRINT_FORMAT ? 0 : 1,
 			_t: Date.now(),
 		});
 		if (letterhead) params.append("letterhead", letterhead);
@@ -528,7 +405,11 @@ export async function silentPrintDoc(doctype, name, printFormat) {
 <body>${html}</body>
 </html>`;
 
-	await qzPrintHTML(fullHTML);
+	if (printFormat === DEFAULT_PRINT_FORMAT) {
+		await qzPrintHTML(fullHTML, undefined, THERMAL_RECEIPT_OPTIONS);
+	} else {
+		await qzPrintHTML(fullHTML);
+	}
 	return true;
 }
 
@@ -562,7 +443,7 @@ export async function silentPrintInvoice(invoiceName, printFormat = null) {
  */
 export async function silentPrintInvoiceFromDoc(invoiceData) {
 	const fullHTML = buildReceiptDocumentHTML(invoiceData, { includeControls: false });
-	await qzPrintHTML(fullHTML);
+	await qzPrintHTML(fullHTML, undefined, THERMAL_RECEIPT_OPTIONS);
 	log.info(`Silent print (local receipt) for ${invoiceData?.name}`);
 	flagOfflineInvoicePrinted(invoiceData?.name);
 	return true;
@@ -628,10 +509,8 @@ export function printInvoiceCustom(invoiceData) {
 	const printContent = buildReceiptDocumentHTML(invoiceData, { includeControls: true });
 
 	printWindow.document.write(printContent);
+	printWindow.onload = () => printWhenReady(printWindow);
 	printWindow.document.close();
-	printWindow.onload = () => {
-		setTimeout(() => printWindow.print(), 250);
-	};
 	flagOfflineInvoicePrinted(invoiceData?.name);
 	return true;
 }

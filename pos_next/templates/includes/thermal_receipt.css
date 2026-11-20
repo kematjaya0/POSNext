@@ -1,0 +1,67 @@
+/* Physical page size belongs to the driver. Content uses at most 72 mm
+   (approximately 576 dots at 203 dpi), without an extra software gutter. */
+@page { size: auto; margin: 0; }
+* { box-sizing: border-box; }
+html { margin: 0; padding: 0; }
+html body,
+html body .print-format-gutter,
+html body .print-format {
+	width: 100%;
+	max-width: 72mm;
+	min-height: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: #fff;
+	box-shadow: none;
+	color: #000;
+	font-family: 'DejaVu Sans', Arial, sans-serif;
+	font-size: 11px;
+	font-weight: 400;
+	line-height: 1.4;
+	text-shadow: none;
+	overflow-wrap: anywhere;
+	word-wrap: break-word;
+}
+.receipt { width: 100%; }
+.header { text-align: center; margin-bottom: 4mm; }
+.company-name { font-size: 16.5px; font-weight: 700; line-height: 1.2; margin-bottom: 1mm; }
+.receipt-title { font-size: 9px; font-weight: 400; letter-spacing: .3px; }
+.receipt-meta { font-size: 9.5px; line-height: 1.5; }
+.receipt-meta-row { display: table; width: 100%; table-layout: fixed; margin-bottom: .25mm; }
+.receipt-meta-label { display: table-cell; width: 38%; vertical-align: top; font-size: 9px; }
+.receipt-meta-value { display: table-cell; font-weight: 400; vertical-align: top; }
+/* Three separators: after metadata, before totals, before the footer. */
+.receipt-items { border-top: 1px solid #000; margin-top: 3mm; padding-top: 2.5mm; }
+.item-row { margin-bottom: 3.5mm; }
+.item-row:last-child { margin-bottom: 0; }
+.item-name { font-size: 10.5px; font-weight: 600; line-height: 1.35; margin-bottom: .8mm; }
+.item-warehouse { font-size: 10.5px; font-weight: 400; }
+.receipt-row { display: table; width: 100%; table-layout: fixed; margin: 3px 0; }
+.receipt-row > span { display: table-cell; vertical-align: top; }
+.receipt-row > span:first-child { width: 58%; text-align: left; }
+.receipt-row > span:last-child { width: 42%; text-align: right; font-variant-numeric: tabular-nums; }
+.item-details { margin: 0; font-size: 9px; line-height: 1.4; }
+.item-details > span:last-child { font-size: 9px; font-weight: 700; }
+.item-discount { margin: .5mm 0 0; font-size: 9px; }
+.item-serials { font-size: 9px; margin-top: 1mm; }
+.item-free { font-size: 10px; font-weight: 400; }
+.receipt-totals { border-top: 1px solid #000; margin-top: 3.5mm; padding-top: 2.5mm; font-size: 10px; }
+.receipt-totals > .receipt-row { margin: .7mm 0; }
+.receipt-totals > .grand-total { font-size: 12px; font-weight: 700; margin: 1.8mm 0; }
+.receipt-payments { font-size: 9.5px; margin-top: 2.5mm; }
+.receipt-payments > .receipt-row { margin: .8mm 0; }
+.total-paid { margin-top: 1mm; }
+.outstanding-row { font-weight: 700; margin-top: 1.5mm; }
+.offline-badge { font-size: 9px; margin-bottom: 2mm; text-align: center; }
+.footer { text-align: center; font-size: 9px; line-height: 1.5; border-top: 1px solid #000; margin-top: 3.5mm; padding-top: 2.5mm; }
+.receipt-thanks { font-size: 9.5px; font-weight: 600; margin-bottom: 1.2mm; }
+.nota-qr, .nextend-nota-qr { margin-top: 3mm !important; }
+.item-row, .grand-total, .footer, .nota-qr, .nextend-nota-qr {
+	break-inside: avoid;
+	page-break-inside: avoid;
+}
+@media print {
+	.no-print { display: none !important; }
+}

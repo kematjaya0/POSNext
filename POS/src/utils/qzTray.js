@@ -228,6 +228,9 @@ export async function findPrinters() {
  * @param {string} [printerName] - Target printer. Falls back to saved printer.
  * @param {Object} [options] - Extra print options
  * @param {number} [options.width] - Paper width in mm (default 80)
+ * @param {boolean} [options.usePrinterPageSize] - Use the driver's page size unless width is provided
+ * @param {number} [options.printableWidth] - HTML render width in mm, separate from paper size
+ * @param {boolean} [options.scaleContent=true] - Fit content to the page
  * @param {string} [options.orientation] - "portrait" | "landscape" (default "portrait")
  * @returns {Promise<boolean>} true if print was dispatched successfully
  */
@@ -245,7 +248,7 @@ export async function printHTML(html, printerName, options = {}) {
 	}
 
 	const config = qz.configs.create(printer, {
-		size: {
+		size: options.usePrinterPageSize && !options.width ? null : {
 			width: options.width || 80,
 			height: null, // auto height for receipts
 		},
@@ -254,6 +257,8 @@ export async function printHTML(html, printerName, options = {}) {
 		margins: { top: 0, right: 0, bottom: 0, left: 0 },
 		colorType: "grayscale",
 		interpolation: "nearest-neighbor",
+		rasterize: false,
+		scaleContent: options.scaleContent ?? true,
 	});
 
 	const data = [
@@ -262,6 +267,7 @@ export async function printHTML(html, printerName, options = {}) {
 			format: "html",
 			flavor: "plain",
 			data: html,
+			...(options.printableWidth ? { options: { pageWidth: options.printableWidth } } : {}),
 		},
 	];
 

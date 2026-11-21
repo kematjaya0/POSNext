@@ -43,12 +43,23 @@ const MACHINE_OK = {
 	can_submit: true,
 	errors: [],
 	format: { name: "Dulux Colorlab", brand: "DULUX", jenis_proses: "Potong Stok", versi: 1, satuan_mesin: "Shot Dulux" },
-	columns: [
-		{ header: "DeliveryId", role: "No. Job", used: true },
-		{ header: "Rgb", role: "", used: false },
-	],
-	sample: { headers: ["DeliveryId", "ColorName"], rows: [["826248", "Light Charcoal"]] },
-	counts: { baru: 5, sudah_diimpor: 0, sebelum_mulai: 1, penyesuaian: 0 },
+	alasan: [],
+	sheet: {
+		baris_header: 1,
+		terbaca: true,
+		columns: [
+			{ huruf: "B", header: "DeliveryId", peran: ["No. Job"] },
+			{ huruf: "AG", header: "NumberOfCans", peran: ["Jumlah Kaleng Cat Jadi"] },
+			{ huruf: "DI", header: "PasteAmnt1", peran: ["Jumlah Tinta 1"] },
+		],
+		rows: [
+			{ row_no: 3646, cells: [{ nilai: "826246", hasil: "" }, { nilai: "2", hasil: "" }, { nilai: "3.12", hasil: "x 2 kaleng = 6.24" }] },
+		],
+	},
+	counts: {
+		baru: 5, sudah_diimpor: 0, sebelum_mulai: 1, di_luar_periode: 2, penyesuaian: 0,
+		punya_cost: true, cost: 65041.17, kaleng: 8,
+	},
 	periode: { dari: "2026-10-12", sampai: "2026-10-14" },
 	rows: [
 		{
@@ -67,7 +78,7 @@ const MACHINE_OK = {
 	],
 	summary: { ok: 1, warning: 0, error: 0 },
 	jobs: [
-		{ no_job: "826248", waktu: "2026-10-14 15:36:01", warna: "Light Charcoal", biaya: 18460.99,
+		{ no_job: "826248", waktu: "2026-10-14 15:36:01", warna: "Light Charcoal", kaleng: 2, biaya: 18460.99,
 			status_cocok: "Tanpa Nota", sales_invoice: null, hpp_nota: 0, selisih_biaya: 0, job_induk: null },
 	],
 	jobs_total: 5,
@@ -75,7 +86,30 @@ const MACHINE_OK = {
 	nota_tanpa_job: [],
 };
 
-function respond(preview, brands = ["NIPPON", "PROPAN", ""], machines = [MACHINE_FORMAT]) {
+const REPORT = {
+	periode: { dari: "2026-10-12", sampai: "2026-10-14" },
+	brands: [
+		{
+			brand: "DULUX", potong_stok: true, jobs: 5, kaleng: 8, cost: 65041.17, punya_cost: true,
+			tinta: [
+				{ kode: "NO1", item_code: "IMT-NO1", item_name: "Tinta NO1", jobs: 5, jumlah_mesin: 605.61,
+					satuan_mesin: "Shot Dulux", faktor: 0.4620937, qty_stok: 279.849, stock_uom: "Mililiter" },
+			],
+			daftar_job: [
+				{ no_job: "824247", waktu: "2026-10-12 09:36:16", warna: "Light Charcoal", base: "T911A", kaleng: 3,
+					cost: 6188.75, impor: "IMT-26-10-0001", pemakaian_tinta: "PMT-0003", status_cocok: "Tanpa Nota",
+					sales_invoice: null },
+			],
+			daftar_job_total: 5,
+		},
+		{
+			brand: "AVIAN", potong_stok: false, jobs: 2, kaleng: 2, cost: 0, punya_cost: false, tinta: [],
+			daftar_job: [], daftar_job_total: 2,
+		},
+	],
+};
+
+function respond(preview, brands = ["NIPPON", "PROPAN", ""], machines = [MACHINE_FORMAT], report = REPORT) {
 	call.mockImplementation(async (method) => {
 		if (method.endsWith("list_uploads"))
 			return [
@@ -88,6 +122,7 @@ function respond(preview, brands = ["NIPPON", "PROPAN", ""], machines = [MACHINE
 		if (method.endsWith("submit_upload")) return "PMT-0003";
 		if (method.endsWith("tinting_import.api.preview")) return preview;
 		if (method.endsWith("tinting_import.api.submit")) return "IMT-2610-0001";
+		if (method.endsWith("tinting_import.api.report")) return report;
 	});
 }
 
@@ -129,9 +164,26 @@ async function chooseFile(wrapper, { periode = true, brand = "PROPAN" } = {}) {
 	await pickFile(wrapper);
 }
 
-async function chooseMachineFile(wrapper, format = "Dulux Colorlab") {
+async function chooseMachineFile(wrapper, format = "Dulux Colorlab", { periode = true } = {}) {
 	await formatSelect(wrapper).setValue(format);
+	if (periode) {
+		const dates = wrapper.findAll("input[type=date]");
+		await dates[0].setValue("2026-10-12");
+		await dates[1].setValue("2026-10-14");
+	}
 	await pickFile(wrapper);
+}
+
+const MACHINE_ARGS = {
+	format_name: "Dulux Colorlab",
+	warehouse: "WH B",
+	file_url: "/private/files/pakai.xlsx",
+	periode_dari: "2026-10-12",
+	periode_sampai: "2026-10-14",
+};
+
+function tampilkan(wrapper) {
+	return wrapper.findAll("button").find((b) => b.text() === "Tampilkan");
 }
 
 function batalkan(wrapper) {
@@ -287,25 +339,68 @@ describe("PemakaianTintaDialog", () => {
 		const options = formatSelect(wrapper).findAll("option").map((o) => o.text());
 		expect(options[0]).toBe("Template Manual");
 		expect(wrapper.text()).toContain("Download Template");
-		expect(wrapper.findAll("input[type=date]")).toHaveLength(2);
+		expect(wrapper.find('[data-test="upload"]').findAll("input[type=date]")).toHaveLength(2);
 
 		await chooseFile(wrapper);
 		expect(call).toHaveBeenCalledWith("nextend.pemakaian_tinta.preview_upload", expect.anything());
 		expect(call).not.toHaveBeenCalledWith("nextend.tinting_import.api.preview", expect.anything());
 	});
 
-	it("reads a machine file without brand or period", async () => {
+	it("reads a machine file with a period and no brand", async () => {
 		respond(MACHINE_OK);
 		const wrapper = await open();
 		await chooseMachineFile(wrapper);
 
 		expect(wrapper.text()).not.toContain("Download Template");
-		expect(wrapper.findAll("input[type=date]")).toHaveLength(0);
-		expect(call).toHaveBeenCalledWith("nextend.tinting_import.api.preview", {
-			format_name: "Dulux Colorlab",
-			warehouse: "WH B",
-			file_url: "/private/files/pakai.xlsx",
-		});
+		expect(brandSelect(wrapper).exists()).toBe(false);
+		expect(wrapper.find('[data-test="upload"]').findAll("input[type=date]")).toHaveLength(2);
+		expect(call).toHaveBeenCalledWith("nextend.tinting_import.api.preview", MACHINE_ARGS);
+	});
+
+	it("needs a period before reading a machine file", async () => {
+		respond(MACHINE_OK);
+		const wrapper = await open();
+		await chooseMachineFile(wrapper, "Dulux Colorlab", { periode: false });
+
+		expect(wrapper.text()).toContain("Isi periode dulu sebelum memilih file.");
+		expect(call).not.toHaveBeenCalledWith("nextend.tinting_import.api.preview", expect.anything());
+	});
+
+	it("names each format by what it does to stock", async () => {
+		respond(MACHINE_OK, ["DULUX"], [MACHINE_FORMAT, { ...MACHINE_FORMAT, name: "Propan Dispense", jenis_proses: "Hanya Riwayat" }]);
+		const wrapper = await open();
+		const options = formatSelect(wrapper).findAll("option").map((o) => o.text());
+		expect(options).toEqual([
+			"Template Manual",
+			"Dulux Colorlab — memotong stok tinta",
+			"Propan Dispense — dicatat saja, stok tidak berubah",
+		]);
+		await formatSelect(wrapper).setValue("Propan Dispense");
+		expect(wrapper.text()).toContain("Stok tinta brand ini tetap lewat Template Manual.");
+		await formatSelect(wrapper).setValue("Dulux Colorlab");
+		expect(wrapper.text()).not.toContain("tetap lewat Template Manual");
+	});
+
+	it("shows cans and cost per job and in total", async () => {
+		respond(MACHINE_OK);
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		expect(wrapper.text()).toContain("8 kaleng");
+		expect(wrapper.text()).toContain("Cost 65.041,17");
+		expect(wrapper.text()).toContain("18.460,99");
+		expect(wrapper.text()).toContain("2 di luar periode");
+		expect(wrapper.text()).toContain("1 sebelum tanggal hitung");
+		expect(wrapper.text()).toContain("0 sudah pernah diunggah");
+	});
+
+	it("hides cost when the format has no cost column", async () => {
+		respond({ ...MACHINE_OK, counts: { ...MACHINE_OK.counts, punya_cost: false, cost: 0 } });
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		expect(wrapper.text()).not.toContain("Cost");
+		expect(wrapper.text()).not.toContain("18.460,99");
 	});
 
 	it("shows machine and stock units with the conversion factor", async () => {
@@ -318,21 +413,76 @@ describe("PemakaianTintaDialog", () => {
 		expect(wrapper.text()).toContain("279.849 Mililiter");
 	});
 
-	it("marks every file column as used or not", async () => {
+	it("shows only the processed columns like an Excel sheet", async () => {
 		respond(MACHINE_OK);
 		const wrapper = await open();
 		await chooseMachineFile(wrapper);
 
-		expect(wrapper.text()).toContain("DeliveryId (Diproses: No. Job)");
-		expect(wrapper.text()).toContain("Rgb (Tidak dipakai)");
+		const sheet = wrapper.find('[data-test="sheet"]');
+		const rows = sheet.findAll("tr").map((row) => row.findAll("th,td").map((cell) => cell.text()));
+		expect(rows[0]).toEqual(["", "B", "AG", "DI"]);
+		expect(rows[1]).toEqual(["", "No. Job", "Jumlah Kaleng Cat Jadi", "Jumlah Tinta 1"]);
+		expect(rows[2]).toEqual(["1", "DeliveryId", "NumberOfCans", "PasteAmnt1"]);
+		expect(rows[3][0]).toBe("…");
+		expect(rows[4][0]).toBe("3646");
+		expect(rows[4][3]).toContain("3.12");
+		expect(rows[4][3]).toContain("→ x 2 kaleng = 6.24");
+	});
+
+	it("shows each colorant of a multi-line cell on its own line", async () => {
+		respond({
+			...MACHINE_OK,
+			sheet: {
+				...MACHINE_OK.sheet,
+				columns: [{ huruf: "P", header: "Colorant", peran: ["Tinta"] }],
+				rows: [{ row_no: 2, cells: [{ nilai: "8K1 = 2.9\n8R1 = 0.863\n", hasil: "8K1 2.9\n8R1 0.863" }] }],
+			},
+		});
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		const [value, read] = wrapper.find('[data-test="sheet"]').findAll("tr")[3].findAll("td")[1].findAll("div");
+		expect(value.classes()).toContain("whitespace-pre");
+		expect(value.element.textContent).toBe("8K1 = 2.9\n8R1 = 0.863");
+		expect(read.classes()).toContain("whitespace-pre");
+		expect(read.element.textContent).toBe("→ 8K1 2.9\n8R1 0.863");
+	});
+
+	it("explains only the nota statuses found in the file, most urgent first", async () => {
+		const job = MACHINE_OK.jobs[0];
+		respond({
+			...MACHINE_OK,
+			jobs: [
+				{ ...job, no_job: "1", status_cocok: "Cocok", sales_invoice: "SINV-1" },
+				{ ...job, no_job: "2", status_cocok: "Tanpa Nota" },
+				{ ...job, no_job: "3", status_cocok: "Tanpa Nota" },
+			],
+		});
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		const section = wrapper.find('[data-test="cek-nota"]');
+		expect(section.text()).toContain("Cek Nota per Job");
+		expect(section.text()).not.toContain("Hasil Cocok dengan Nota");
+		const legend = section.findAll('[data-test="keterangan-status"] li').map((item) => item.text());
+		expect(legend).toHaveLength(2);
+		expect(legend[0]).toMatch(/^Tanpa Nota \(2\): mesin mengaduk cat ini/);
+		expect(legend[0]).toContain("Tidak menghalangi Ajukan");
+		expect(legend[1]).toMatch(/^Cocok \(1\): notanya ada/);
 	});
 
 	it("blocks a machine file whose rows have errors", async () => {
-		respond({ ...MACHINE_OK, can_submit: false, errors: ["Format file tidak sesuai"] });
+		respond({
+			...MACHINE_OK,
+			can_submit: false,
+			errors: ["Format file tidak sesuai"],
+			alasan: ["3 kode tinta belum dipetakan ke Item. Stock Manager sudah diberi tahu."],
+		});
 		const wrapper = await open();
 		await chooseMachineFile(wrapper);
 
 		expect(wrapper.text()).toContain("Format file tidak sesuai");
+		expect(wrapper.find('[data-test="alasan"]').text()).toContain("3 kode tinta belum dipetakan ke Item");
 		expect(ajukan(wrapper).element.disabled).toBe(true);
 	});
 
@@ -346,11 +496,7 @@ describe("PemakaianTintaDialog", () => {
 
 		await ajukan(wrapper).trigger("click");
 		await flushPromises();
-		expect(call).toHaveBeenCalledWith("nextend.tinting_import.api.submit", {
-			format_name: "Dulux Colorlab",
-			warehouse: "WH B",
-			file_url: "/private/files/pakai.xlsx",
-		});
+		expect(call).toHaveBeenCalledWith("nextend.tinting_import.api.submit", MACHINE_ARGS);
 	});
 
 	it("says a history-only format does not change stock", async () => {
@@ -361,7 +507,7 @@ describe("PemakaianTintaDialog", () => {
 		const wrapper = await open();
 		await chooseMachineFile(wrapper, "Dulux Colorlab");
 
-		expect(wrapper.text()).toContain("Hanya Riwayat, stok tidak berubah");
+		expect(wrapper.text()).toContain("Dicatat saja, stok tidak berubah");
 	});
 
 	it("lists a history-only upload without a Batalkan button", async () => {
@@ -381,5 +527,59 @@ describe("PemakaianTintaDialog", () => {
 		expect(wrapper.text()).toContain("Tercatat");
 		expect(wrapper.text()).toContain("2 job mesin");
 		expect(batalkan(wrapper)).toHaveLength(0);
+	});
+
+	describe("laporan pemakaian tinta", () => {
+		it("asks the report for the chosen period and brand", async () => {
+			respond(MACHINE_OK, [], [MACHINE_FORMAT, { ...MACHINE_FORMAT, name: "Avian Dispense", brand: "AVIAN" }]);
+			const wrapper = await open();
+			const laporan = wrapper.find('[data-test="laporan"]');
+			const options = laporan.find('select[aria-label="Brand Laporan"]').findAll("option").map((o) => o.text());
+			expect(options).toEqual(["Semua", "AVIAN", "DULUX"]);
+
+			const dates = laporan.findAll("input[type=date]");
+			await dates[0].setValue("2026-10-12");
+			await dates[1].setValue("2026-10-14");
+			await laporan.find('select[aria-label="Brand Laporan"]').setValue("DULUX");
+			await tampilkan(wrapper).trigger("click");
+			await flushPromises();
+			expect(call).toHaveBeenCalledWith("nextend.tinting_import.api.report", {
+				warehouse: "WH B",
+				periode_dari: "2026-10-12",
+				periode_sampai: "2026-10-14",
+				brand: "DULUX",
+			});
+		});
+
+		it("shows tinta with machine and stock units, and cost per job and in total", async () => {
+			respond(MACHINE_OK);
+			const wrapper = await open();
+			await tampilkan(wrapper).trigger("click");
+			await flushPromises();
+
+			const [dulux, avian] = wrapper.findAll('[data-test="laporan-brand"]');
+			expect(dulux.text()).toContain("DULUX");
+			expect(dulux.text()).toContain("5 job");
+			expect(dulux.text()).toContain("8 kaleng");
+			expect(dulux.text()).toContain("Cost 65.041,17");
+			expect(dulux.text()).toContain("605.61 Shot Dulux");
+			expect(dulux.text()).toContain("0.4620937");
+			expect(dulux.text()).toContain("279.849 Mililiter");
+			expect(dulux.text()).toContain("Daftar job (5)");
+			expect(dulux.text()).toContain("6.188,75");
+			expect(dulux.text()).toContain("IMT-26-10-0001");
+
+			expect(avian.text()).toContain("dicatat saja");
+			expect(avian.text()).toContain("Cost -");
+			expect(avian.text()).toContain("Tanpa rincian tinta");
+		});
+
+		it("says when nothing was uploaded in the period", async () => {
+			respond(MACHINE_OK, undefined, undefined, { periode: REPORT.periode, brands: [] });
+			const wrapper = await open();
+			await tampilkan(wrapper).trigger("click");
+			await flushPromises();
+			expect(wrapper.text()).toContain("Belum ada pemakaian tinta yang diunggah pada periode ini.");
+		});
 	});
 });

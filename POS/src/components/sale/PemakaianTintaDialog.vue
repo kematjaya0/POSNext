@@ -16,7 +16,7 @@
 				</div>
 
 				<!-- New upload -->
-				<div class="border border-gray-200 rounded-lg p-3 flex flex-col gap-2">
+				<div class="border border-gray-200 rounded-lg p-3 flex flex-col gap-2" data-test="upload">
 					<div class="text-sm font-semibold text-gray-900">{{ __("Upload Baru") }}</div>
 					<div class="flex flex-wrap items-end gap-2">
 						<label class="text-xs text-gray-600 flex flex-col gap-1">
@@ -28,7 +28,7 @@
 							>
 								<option :value="MANUAL">{{ __("Template Manual") }}</option>
 								<option v-for="machine in formats" :key="machine.name" :value="machine.name">
-									{{ machine.name }} · {{ machine.jenis_proses }}
+									{{ formatLabel(machine) }}
 								</option>
 							</select>
 						</label>
@@ -46,22 +46,24 @@
 									</option>
 								</select>
 							</label>
-							<label class="text-xs text-gray-600 flex flex-col gap-1">
-								{{ __("Periode Dari") }}
-								<input
-									v-model="periodeDari"
-									type="date"
-									class="h-8 text-sm border border-gray-300 rounded px-2"
-								/>
-							</label>
-							<label class="text-xs text-gray-600 flex flex-col gap-1">
-								{{ __("Periode Sampai") }}
-								<input
-									v-model="periodeSampai"
-									type="date"
-									class="h-8 text-sm border border-gray-300 rounded px-2"
-								/>
-							</label>
+						</template>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Periode Dari") }}
+							<input
+								v-model="periodeDari"
+								type="date"
+								class="h-8 text-sm border border-gray-300 rounded px-2"
+							/>
+						</label>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Periode Sampai") }}
+							<input
+								v-model="periodeSampai"
+								type="date"
+								class="h-8 text-sm border border-gray-300 rounded px-2"
+							/>
+						</label>
+						<template v-if="format === MANUAL">
 							<a
 								v-if="brand !== null"
 								:href="templateUrl"
@@ -94,9 +96,18 @@
 							)
 						}}
 					</p>
-					<p v-else class="text-xs text-gray-500">
-						{{ __("Upload sore saat closing, setelah semua penjualan hari ini masuk.") }}
-					</p>
+					<template v-else>
+						<p class="text-xs text-gray-500">
+							{{
+								__(
+									"Isi periode pemakaian, lalu pilih file asli dari mesin. Hanya job di periode itu yang diproses. Upload sore saat closing, setelah semua penjualan hari ini masuk."
+								)
+							}}
+						</p>
+						<p v-if="selectedFormat && !cutsStock(selectedFormat)" class="text-xs text-blue-700">
+							{{ __("Format ini hanya mencatat job dan cost. Stok tinta brand ini tetap lewat Template Manual.") }}
+						</p>
+					</template>
 					<p v-if="error" class="text-sm text-red-600">{{ error }}</p>
 					<div v-if="previewing" class="text-sm text-gray-500">{{ __("Membaca file...") }}</div>
 				</div>
@@ -176,68 +187,89 @@
 						<span class="font-semibold">{{ __("Preview") }}</span>
 						<span class="text-gray-700">{{ preview.format.name }}</span>
 						<span class="text-gray-500">
-							{{ preview.format.jenis_proses }} · {{ __("versi {0}", [preview.format.versi]) }}
+							{{ processLabel(preview.format) }} · {{ __("versi {0}", [preview.format.versi]) }}
 						</span>
 					</div>
-					<p
-						v-if="preview.format.jenis_proses === 'Hanya Riwayat'"
-						class="text-xs text-blue-700"
-					>
-						{{ __("Hanya Riwayat, stok tidak berubah") }}
+					<p v-if="!cutsStock(preview.format)" class="text-xs text-blue-700">
+						{{ __("Dicatat saja, stok tidak berubah") }}
 					</p>
 					<ul v-if="preview.errors.length" class="text-sm text-red-600 list-disc ps-5">
 						<li v-for="message in preview.errors" :key="message">{{ message }}</li>
 					</ul>
 
-					<div class="text-xs">
-						<div class="font-semibold text-gray-900 mb-1">{{ __("Kolom file") }}</div>
-						<div class="flex flex-wrap gap-x-3 gap-y-1">
-							<span v-for="column in preview.columns" :key="column.header">
-								<span v-if="column.used" class="text-green-700">
-									{{ column.header }} ({{ __("Diproses") }}{{ column.role ? `: ${column.role}` : "" }})
-								</span>
-								<span v-else class="text-gray-400">
-									{{ column.header }} ({{ __("Tidak dipakai") }})
-								</span>
-							</span>
-						</div>
-					</div>
-
-					<div v-if="preview.sample.rows.length" class="overflow-x-auto text-xs">
-						<div class="font-semibold text-gray-900 mb-1">{{ __("Contoh Baris") }}</div>
-						<table class="w-full">
-							<thead class="text-gray-500 border-b border-gray-200">
+					<div v-if="preview.sheet && preview.sheet.columns.length" class="overflow-x-auto text-xs">
+						<div class="font-semibold text-gray-900 mb-1">{{ __("Isi file yang diproses") }}</div>
+						<table class="border-collapse whitespace-nowrap" data-test="sheet">
+							<tbody>
 								<tr>
+									<th class="border border-gray-200 bg-gray-100 px-2 py-1"></th>
 									<th
-										v-for="header in preview.sample.headers"
-										:key="header"
-										class="py-1 pe-2 text-start whitespace-nowrap"
+										v-for="column in preview.sheet.columns"
+										:key="column.huruf"
+										class="border border-gray-200 bg-gray-100 px-2 py-1 font-medium text-gray-500"
 									>
-										{{ header }}
+										{{ column.huruf }}
 									</th>
 								</tr>
-							</thead>
-							<tbody>
-								<tr v-for="(row, index) in preview.sample.rows" :key="index">
+								<tr>
+									<td class="border border-gray-200 bg-gray-100 px-2 py-1"></td>
 									<td
-										v-for="(cell, cellIndex) in row"
-										:key="cellIndex"
-										class="py-1 pe-2 whitespace-nowrap"
+										v-for="column in preview.sheet.columns"
+										:key="column.huruf"
+										class="border border-gray-200 bg-green-50 px-2 py-1 font-semibold text-gray-900"
 									>
-										{{ cell }}
+										{{ column.peran.join(", ") }}
 									</td>
 								</tr>
+								<tr>
+									<td class="border border-gray-200 bg-gray-100 px-2 py-1 text-center text-gray-500">
+										{{ preview.sheet.baris_header }}
+									</td>
+									<td
+										v-for="column in preview.sheet.columns"
+										:key="column.huruf"
+										class="border border-gray-200 px-2 py-1 font-semibold"
+									>
+										{{ column.header }}
+									</td>
+								</tr>
+								<template v-for="(row, index) in preview.sheet.rows" :key="row.row_no">
+									<tr v-if="row.row_no > previousRow(index) + 1">
+										<td class="border border-gray-200 bg-gray-100 px-2 text-center text-gray-500">…</td>
+										<td :colspan="preview.sheet.columns.length" class="border-y border-gray-200"></td>
+									</tr>
+									<tr>
+										<td class="border border-gray-200 bg-gray-100 px-2 py-1 text-center text-gray-500">
+											{{ row.row_no }}
+										</td>
+										<td
+											v-for="(cell, cellIndex) in row.cells"
+											:key="cellIndex"
+											class="border border-gray-200 px-2 py-1 align-top"
+										>
+											<div class="whitespace-pre">{{ String(cell.nilai ?? "").trim() }}</div>
+											<div v-if="cell.hasil" class="whitespace-pre text-[11px] text-gray-500">→ {{ cell.hasil }}</div>
+										</td>
+									</tr>
+								</template>
 							</tbody>
 						</table>
 					</div>
 
 					<div class="flex flex-wrap gap-3 text-sm">
 						<span>{{ __("{0} job baru", [preview.counts.baru]) }}</span>
-						<span class="text-gray-500">
-							{{ __("{0} sudah diimpor", [preview.counts.sudah_diimpor]) }}
+						<span>{{ __("{0} kaleng", [preview.counts.kaleng]) }}</span>
+						<span v-if="preview.counts.punya_cost" class="font-semibold">
+							{{ __("Cost {0}", [money(preview.counts.cost)]) }}
 						</span>
 						<span class="text-gray-500">
-							{{ __("{0} sebelum mulai", [preview.counts.sebelum_mulai]) }}
+							{{ __("{0} sudah pernah diunggah", [preview.counts.sudah_diimpor]) }}
+						</span>
+						<span v-if="preview.counts.di_luar_periode" class="text-gray-500">
+							{{ __("{0} di luar periode", [preview.counts.di_luar_periode]) }}
+						</span>
+						<span class="text-gray-500">
+							{{ __("{0} sebelum tanggal hitung", [preview.counts.sebelum_mulai]) }}
 						</span>
 						<span v-if="preview.counts.penyesuaian" class="text-gray-500">
 							{{ __("{0} penyesuaian", [preview.counts.penyesuaian]) }}
@@ -292,33 +324,52 @@
 						</table>
 					</div>
 
-					<div v-if="preview.jobs.length" class="max-h-72 overflow-y-auto">
-						<div class="font-semibold text-gray-900 mb-1">{{ __("Hasil Cocok dengan Nota") }}</div>
-						<table class="w-full text-xs">
-							<thead class="text-gray-500 border-b border-gray-200">
-								<tr>
-									<th class="py-1 pe-2 text-start">{{ __("No. Job") }}</th>
-									<th class="py-1 pe-2 text-start">{{ __("Waktu") }}</th>
-									<th class="py-1 pe-2 text-start">{{ __("Warna") }}</th>
-									<th class="py-1 pe-2 text-start">{{ __("Nota") }}</th>
-									<th class="py-1 text-start">{{ __("Status") }}</th>
-								</tr>
-							</thead>
-							<tbody>
-								<tr
-									v-for="job in preview.jobs"
-									:key="job.no_job"
-									class="border-b border-gray-50"
-									:class="MATCH_CLASS[job.status_cocok] || ''"
-								>
-									<td class="py-1 pe-2">{{ job.no_job }}</td>
-									<td class="py-1 pe-2 whitespace-nowrap">{{ job.waktu }}</td>
-									<td class="py-1 pe-2">{{ job.warna }}</td>
-									<td class="py-1 pe-2">{{ job.sales_invoice || "-" }}</td>
-									<td class="py-1">{{ job.status_cocok }}</td>
-								</tr>
-							</tbody>
-						</table>
+					<div v-if="preview.jobs.length" class="space-y-2" data-test="cek-nota">
+						<div>
+							<div class="font-semibold text-gray-900">{{ __("Cek Nota per Job") }}</div>
+							<div class="text-xs text-gray-500">
+								{{ __("Setiap cat yang diaduk mesin dicari notanya lewat No. Job yang diketik di nota.") }}
+							</div>
+						</div>
+						<ul class="text-xs space-y-0.5" data-test="keterangan-status">
+							<li v-for="item in matchLegend" :key="item.status">
+								<span class="font-semibold text-gray-900">{{ __(item.status) }}</span>
+								<span class="text-gray-500"> ({{ item.count }})</span>: {{ __(item.text) }}
+							</li>
+						</ul>
+						<div class="max-h-72 overflow-y-auto">
+							<table class="w-full text-xs">
+								<thead class="text-gray-500 border-b border-gray-200">
+									<tr>
+										<th class="py-1 pe-2 text-start">{{ __("No. Job") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Waktu") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Warna") }}</th>
+										<th class="py-1 pe-2 text-end">{{ __("Kaleng") }}</th>
+										<th v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end">{{ __("Cost") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Nota") }}</th>
+										<th class="py-1 text-start">{{ __("Status") }}</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr
+										v-for="job in preview.jobs"
+										:key="job.no_job"
+										class="border-b border-gray-50"
+										:class="MATCH_CLASS[job.status_cocok] || ''"
+									>
+										<td class="py-1 pe-2">{{ job.no_job }}</td>
+										<td class="py-1 pe-2 whitespace-nowrap">{{ job.waktu }}</td>
+										<td class="py-1 pe-2">{{ job.warna }}</td>
+										<td class="py-1 pe-2 text-end">{{ job.kaleng }}</td>
+										<td v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end whitespace-nowrap">
+											{{ job.biaya === null ? "-" : money(job.biaya) }}
+										</td>
+										<td class="py-1 pe-2">{{ job.sales_invoice || "-" }}</td>
+										<td class="py-1">{{ __(job.status_cocok) }}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
 					</div>
 
 					<div v-if="preview.nota_kurang.length" class="text-xs">
@@ -347,9 +398,9 @@
 							{{ __("Ajukan") }}
 						</Button>
 					</div>
-					<p v-if="!preview.can_submit" class="text-xs text-red-600">
-						{{ __("File belum bisa diajukan - hubungi Stock Manager bila formatnya berubah.") }}
-					</p>
+					<ul v-if="!preview.can_submit" class="text-xs text-red-600 list-disc ps-5" data-test="alasan">
+						<li v-for="reason in preview.alasan" :key="reason">{{ reason }}</li>
+					</ul>
 				</div>
 
 				<!-- History -->
@@ -401,6 +452,119 @@
 						</div>
 					</div>
 				</div>
+
+				<!-- Laporan -->
+				<div class="border border-gray-200 rounded-lg p-3 flex flex-col gap-2" data-test="laporan">
+					<div class="text-sm font-semibold text-gray-900">{{ __("Laporan Pemakaian Tinta") }}</div>
+					<div class="flex flex-wrap items-end gap-2">
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Dari") }}
+							<input v-model="reportDari" type="date" class="h-8 text-sm border border-gray-300 rounded px-2" />
+						</label>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Sampai") }}
+							<input v-model="reportSampai" type="date" class="h-8 text-sm border border-gray-300 rounded px-2" />
+						</label>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Brand") }}
+							<select
+								v-model="reportBrand"
+								class="h-8 text-sm border border-gray-300 rounded px-2"
+								:aria-label="__('Brand Laporan')"
+							>
+								<option value="">{{ __("Semua") }}</option>
+								<option v-for="name in reportBrands" :key="name" :value="name">{{ name }}</option>
+							</select>
+						</label>
+						<Button variant="subtle" :loading="loadingReport" @click="loadReport">
+							{{ __("Tampilkan") }}
+						</Button>
+					</div>
+					<p v-if="reportError" class="text-sm text-red-600">{{ reportError }}</p>
+					<p v-else-if="report && !report.brands.length" class="text-sm text-gray-500">
+						{{ __("Belum ada pemakaian tinta yang diunggah pada periode ini.") }}
+					</p>
+					<div
+						v-for="entry in report?.brands || []"
+						:key="entry.brand"
+						class="border-t border-gray-100 pt-2 flex flex-col gap-2"
+						data-test="laporan-brand"
+					>
+						<div class="flex flex-wrap items-center gap-3 text-sm">
+							<span class="font-semibold text-gray-900">{{ entry.brand }}</span>
+							<span class="text-gray-500">
+								{{ entry.potong_stok ? __("memotong stok tinta") : __("dicatat saja") }}
+							</span>
+							<span>{{ __("{0} job", [entry.jobs]) }}</span>
+							<span>{{ __("{0} kaleng", [entry.kaleng]) }}</span>
+							<span class="font-semibold">
+								{{ __("Cost {0}", [entry.punya_cost ? money(entry.cost) : "-"]) }}
+							</span>
+						</div>
+						<table v-if="entry.tinta.length" class="w-full text-xs">
+							<thead class="text-gray-500 border-b border-gray-200">
+								<tr>
+									<th class="py-1 pe-2 text-start">{{ __("Kode") }}</th>
+									<th class="py-1 pe-2 text-start">{{ __("Item") }}</th>
+									<th class="py-1 pe-2 text-end">{{ __("Jumlah Mesin") }}</th>
+									<th class="py-1 pe-2 text-end">{{ __("Faktor") }}</th>
+									<th class="py-1 pe-2 text-end">{{ __("Qty Stok") }}</th>
+									<th class="py-1 text-end">{{ __("Job") }}</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr
+									v-for="row in entry.tinta"
+									:key="`${row.kode}-${row.item_code}-${row.faktor}`"
+									class="border-b border-gray-50"
+								>
+									<td class="py-1 pe-2">{{ row.kode }}</td>
+									<td class="py-1 pe-2">{{ row.item_name || row.item_code }}</td>
+									<td class="py-1 pe-2 text-end whitespace-nowrap">
+										{{ row.jumlah_mesin }} {{ row.satuan_mesin || "" }}
+									</td>
+									<td class="py-1 pe-2 text-end">{{ row.faktor }}</td>
+									<td class="py-1 pe-2 text-end whitespace-nowrap">{{ row.qty_stok }} {{ row.stock_uom || "" }}</td>
+									<td class="py-1 text-end">{{ row.jobs }}</td>
+								</tr>
+							</tbody>
+						</table>
+						<p v-else class="text-xs text-gray-500">
+							{{ __("Tanpa rincian tinta: format brand ini hanya mencatat job.") }}
+						</p>
+						<details class="text-xs">
+							<summary class="cursor-pointer text-gray-700">
+								{{ __("Daftar job ({0})", [entry.daftar_job_total]) }}
+							</summary>
+							<table class="w-full mt-1">
+								<thead class="text-gray-500 border-b border-gray-200">
+									<tr>
+										<th class="py-1 pe-2 text-start">{{ __("No. Job") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Waktu") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Warna") }}</th>
+										<th class="py-1 pe-2 text-end">{{ __("Kaleng") }}</th>
+										<th class="py-1 pe-2 text-end">{{ __("Cost") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Nota") }}</th>
+										<th class="py-1 text-start">{{ __("No. Upload") }}</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr v-for="job in entry.daftar_job" :key="job.no_job" class="border-b border-gray-50">
+										<td class="py-1 pe-2">{{ job.no_job }}</td>
+										<td class="py-1 pe-2 whitespace-nowrap">{{ job.waktu }}</td>
+										<td class="py-1 pe-2">{{ job.warna }}</td>
+										<td class="py-1 pe-2 text-end">{{ job.kaleng }}</td>
+										<td class="py-1 pe-2 text-end whitespace-nowrap">
+											{{ job.cost === null ? "-" : money(job.cost) }}
+										</td>
+										<td class="py-1 pe-2">{{ job.sales_invoice || "-" }}</td>
+										<td class="py-1">{{ job.impor }}</td>
+									</tr>
+								</tbody>
+							</table>
+						</details>
+					</div>
+				</div>
 			</div>
 		</template>
 	</Dialog>
@@ -416,6 +580,15 @@ const IMPORT = "nextend.tinting_import.api";
 const MANUAL = "__manual__";
 const ROW_CLASS = { error: "bg-red-50", warning: "bg-yellow-50", ok: "" };
 const MATCH_CLASS = { "Tanpa Nota": "bg-yellow-50", "Selisih Biaya": "bg-yellow-50" };
+// Urutan = yang perlu dicek dulu di atas. Hanya status yang muncul di file ini yang ditampilkan.
+const MATCH_STATUS = [
+	["Tanpa Nota", "mesin mengaduk cat ini, tapi belum ada nota dengan No. Job-nya. Cek apakah belum dibayar, lupa atau salah ketik No. Job. Tidak menghalangi Ajukan."],
+	["Selisih Biaya", "notanya ada, tapi cost tinta dari mesin berbeda dengan HPP tinta di nota. Cek formula atau tinta di nota."],
+	["Menunggu Nota", "notanya masih draft, belum dibayar. Berubah sendiri setelah nota selesai."],
+	["Cocok", "notanya ada dan cost tinta sama dengan nota."],
+	["Tanpa Biaya", "notanya ada; file mesin ini tidak punya kolom cost, jadi biaya tidak dibandingkan."],
+	["Penyesuaian", "koreksi atau tambahan tinta dari mesin, bukan penjualan baru, jadi tidak dicari notanya."],
+];
 const STATUS_CLASS = {
 	Diajukan: "bg-blue-100 text-blue-700",
 	Tercatat: "bg-blue-100 text-blue-700",
@@ -452,6 +625,24 @@ const formats = ref([]);
 // null = not chosen yet; "" = tinta without a brand.
 const brand = ref(null);
 const format = ref(MANUAL);
+const report = ref(null);
+const reportDari = ref(today());
+const reportSampai = ref(today());
+const reportBrand = ref("");
+const reportError = ref("");
+const loadingReport = ref(false);
+const matchLegend = computed(() => {
+	const counts = {};
+	for (const job of preview.value?.jobs || []) counts[job.status_cocok] = (counts[job.status_cocok] || 0) + 1;
+	return MATCH_STATUS.filter(([status]) => counts[status]).map(([status, text]) => ({
+		status,
+		text,
+		count: counts[status],
+	}));
+});
+const reportBrands = computed(() => [...new Set(formats.value.map((machine) => machine.brand))].sort());
+
+const selectedFormat = computed(() => formats.value.find((machine) => machine.name === format.value));
 
 const templateUrl = computed(
 	() =>
@@ -475,12 +666,58 @@ watch(
 watch(show, (value) => emit("update:modelValue", value));
 watch(warehouse, () => {
 	resetUpload();
+	report.value = null;
 	loadUploads();
 });
 watch(format, () => resetUpload());
 watch([brand, periodeDari, periodeSampai], () => {
-	if (fileUrl.value && brand.value !== null) runPreview();
+	if (!fileUrl.value || !periodeDari.value || !periodeSampai.value) return;
+	if (format.value !== MANUAL || brand.value !== null) runPreview();
 });
+
+function today() {
+	const now = new Date();
+	const pad = (value) => String(value).padStart(2, "0");
+	return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+async function loadReport() {
+	loadingReport.value = true;
+	reportError.value = "";
+	try {
+		report.value = await call(`${IMPORT}.report`, {
+			warehouse: warehouse.value,
+			periode_dari: reportDari.value,
+			periode_sampai: reportSampai.value,
+			brand: reportBrand.value || null,
+		});
+	} catch (err) {
+		report.value = null;
+		reportError.value = messageOf(err);
+	} finally {
+		loadingReport.value = false;
+	}
+}
+
+function cutsStock(machine) {
+	return machine?.jenis_proses === "Potong Stok";
+}
+
+function processLabel(machine) {
+	return cutsStock(machine) ? __("memotong stok tinta") : __("dicatat saja, stok tidak berubah");
+}
+
+function formatLabel(machine) {
+	return `${machine.name} — ${processLabel(machine)}`;
+}
+
+function money(value) {
+	return Number(value || 0).toLocaleString("id-ID", { maximumFractionDigits: 2 });
+}
+
+function previousRow(index) {
+	return index ? preview.value.sheet.rows[index - 1].row_no : preview.value.sheet.baris_header;
+}
 
 function brandLabel(name) {
 	return name || __("(Tanpa Brand)");
@@ -542,6 +779,11 @@ async function onFileChosen(event) {
 		event.target.value = "";
 		return;
 	}
+	if (format.value !== MANUAL && (!periodeDari.value || !periodeSampai.value)) {
+		error.value = __("Isi periode dulu sebelum memilih file.");
+		event.target.value = "";
+		return;
+	}
 	previewing.value = true;
 	try {
 		fileUrl.value = await uploadFile(file);
@@ -570,6 +812,8 @@ async function runPreview() {
 						format_name: format.value,
 						warehouse: warehouse.value,
 						file_url: fileUrl.value,
+						periode_dari: periodeDari.value,
+						periode_sampai: periodeSampai.value,
 					});
 	} catch (err) {
 		preview.value = null;
@@ -595,6 +839,8 @@ async function submitUpload() {
 				format_name: format.value,
 				warehouse: warehouse.value,
 				file_url: fileUrl.value,
+				periode_dari: periodeDari.value,
+				periode_sampai: periodeSampai.value,
 			});
 		}
 		resetUpload();

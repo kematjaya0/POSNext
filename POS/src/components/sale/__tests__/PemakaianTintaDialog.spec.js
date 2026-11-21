@@ -190,6 +190,14 @@ function batalkan(wrapper) {
 	return wrapper.findAll("button").filter((b) => b.text() === "Batalkan");
 }
 
+function shown(wrapper, panel) {
+	return !(wrapper.find(`[data-test="panel-${panel}"]`).attributes("style") || "").includes("display: none");
+}
+
+async function openTab(wrapper, name) {
+	await wrapper.find(`[data-test="tab-${name}"]`).trigger("click");
+}
+
 function ajukan(wrapper) {
 	return wrapper.findAll("button").find((b) => b.text() === "Ajukan");
 }
@@ -295,6 +303,80 @@ describe("PemakaianTintaDialog", () => {
 		await chooseFile(wrapper);
 		expect(wrapper.text()).toContain("Too big");
 		expect(ajukan(wrapper)).toBeUndefined();
+	});
+
+	describe("tab", () => {
+		it("opens on Upload; Riwayat and Laporan are separate tabs", async () => {
+			respond(PREVIEW_OK);
+			const wrapper = await open();
+			expect([shown(wrapper, "upload"), shown(wrapper, "riwayat"), shown(wrapper, "laporan")]).toEqual([
+				true,
+				false,
+				false,
+			]);
+			expect(wrapper.find('[data-test="tab-upload"]').attributes("aria-selected")).toBe("true");
+			expect(wrapper.find('[data-test="tab-riwayat"]').text().replace(/\s+/g, " ")).toBe("Riwayat (2)");
+
+			await openTab(wrapper, "riwayat");
+			expect([shown(wrapper, "upload"), shown(wrapper, "riwayat"), shown(wrapper, "laporan")]).toEqual([
+				false,
+				true,
+				false,
+			]);
+			expect(wrapper.find('[data-test="panel-riwayat"]').text()).toContain("PMT-0002");
+
+			await openTab(wrapper, "laporan");
+			expect(shown(wrapper, "laporan")).toBe(true);
+			expect(wrapper.find('[data-test="panel-laporan"]').find('[data-test="laporan"]').exists()).toBe(true);
+		});
+
+		it("keeps the preview when switching tabs", async () => {
+			respond(MACHINE_OK);
+			const wrapper = await open();
+			await chooseMachineFile(wrapper);
+			await openTab(wrapper, "laporan");
+			await openTab(wrapper, "upload");
+			expect(wrapper.find('[data-test="sheet"]').exists()).toBe(true);
+			expect(ajukan(wrapper).element.disabled).toBe(false);
+		});
+
+		it("moves to Riwayat after Ajukan, and back to Upload when reopened", async () => {
+			respond(MACHINE_OK);
+			const wrapper = await open();
+			await chooseMachineFile(wrapper);
+			await ajukan(wrapper).trigger("click");
+			await flushPromises();
+			expect(shown(wrapper, "riwayat")).toBe(true);
+
+			await wrapper.setProps({ modelValue: false });
+			await wrapper.setProps({ modelValue: true });
+			await flushPromises();
+			expect(shown(wrapper, "upload")).toBe(true);
+		});
+
+		it("stays on Upload when Ajukan fails", async () => {
+			respond(MACHINE_OK);
+			const wrapper = await open();
+			await chooseMachineFile(wrapper);
+			call.mockImplementation(async (method) => {
+				if (method.endsWith("tinting_import.api.submit")) throw new Error("Stok tidak cukup");
+			});
+			await ajukan(wrapper).trigger("click");
+			await flushPromises();
+			expect(shown(wrapper, "upload")).toBe(true);
+		});
+
+		it("shows a failed withdraw and a failed load inside Riwayat", async () => {
+			respond(PREVIEW_OK);
+			const wrapper = await open();
+			await openTab(wrapper, "riwayat");
+			call.mockImplementation(async () => {
+				throw new Error("Server mati");
+			});
+			await wrapper.findAll("button").find((b) => b.text() === "Refresh").trigger("click");
+			await flushPromises();
+			expect(wrapper.find('[data-test="panel-riwayat"]').text()).toContain("Server mati");
+		});
 	});
 
 	it("offers Batalkan only on uploads the server allows to withdraw", async () => {

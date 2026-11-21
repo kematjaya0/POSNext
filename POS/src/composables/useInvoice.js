@@ -761,6 +761,24 @@ export function useInvoice() {
 		return [...qtyByCompany].map(([company, qty]) => ({ company, share: qty / total }));
 	}
 
+	/** Whether a company's sales template charges tax (PPN): the PKP companies. */
+	function isTaxedCompany(company) {
+		const rate = taxRatesByCompany.value[company];
+		return Boolean(rate && rate.included + rate.added > 0);
+	}
+
+	/**
+	 * Qty of a row billed to a taxed company, for the cart's PPN badge.
+	 * @returns {{taxed: number, total: number}}
+	 */
+	function rowPpnQty(item) {
+		const total = Number(item.quantity) || 0;
+		const share = rowTaxShares(item)
+			.filter(({ company }) => isTaxedCompany(company))
+			.reduce((sum, part) => sum + part.share, 0);
+		return { taxed: Math.round(share * total * 1000) / 1000, total };
+	}
+
 	/**
 	 * Tell the composable which companies a row's stock is billed to.
 	 * @param {(item: Object) => Array<{company: string, qty: number}> | undefined} chunksOf
@@ -1841,6 +1859,8 @@ export function useInvoice() {
 		setDefaultCustomer,
 		loadTaxRules,
 		setTaxChunks,
+		isTaxedCompany,
+		rowPpnQty,
 		taxOnGross,
 		recalculateItem,
 		rebuildIncrementalCache,

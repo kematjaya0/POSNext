@@ -569,11 +569,19 @@
 
 						<!-- Item Details -->
 						<div class="min-w-0">
-							<h3
-								class="text-[10px] sm:text-xs font-semibold text-gray-900 truncate mb-0.5 leading-tight"
-							>
-								{{ item.item_name }}
-							</h3>
+							<div class="flex items-center gap-1 mb-0.5">
+								<h3
+									class="text-[10px] sm:text-xs font-semibold text-gray-900 truncate leading-tight"
+								>
+									{{ item.item_name }}
+								</h3>
+								<span
+									v-if="cartStore.itemHasPpn(item)"
+									class="flex-shrink-0 px-1 rounded bg-blue-100 text-blue-700 text-[8px] sm:text-[9px] font-bold leading-tight"
+									:title="__('Kena PPN')"
+									>PPN</span
+								>
+							</div>
 							<p
 								v-if="item.attributes"
 								class="text-[8px] sm:text-[9px] text-gray-400 truncate leading-tight"
@@ -845,11 +853,19 @@
 							<td
 								class="px-2 sm:px-3 py-2 max-w-[120px] sm:max-w-[180px] md:max-w-[200px]"
 							>
-								<div
-									class="text-xs sm:text-sm font-medium text-gray-900 truncate"
-									:title="item.item_name"
-								>
-									{{ item.item_name }}
+								<div class="flex items-center gap-1">
+									<div
+										class="text-xs sm:text-sm font-medium text-gray-900 truncate"
+										:title="item.item_name"
+									>
+										{{ item.item_name }}
+									</div>
+									<span
+										v-if="cartStore.itemHasPpn(item)"
+										class="flex-shrink-0 px-1 rounded bg-blue-100 text-blue-700 text-[9px] sm:text-[10px] font-bold leading-tight"
+										:title="__('Kena PPN')"
+										>PPN</span
+									>
 								</div>
 								<div
 									v-if="item.attributes"
@@ -1072,6 +1088,7 @@
 import LazyImage from "@/components/common/LazyImage.vue";
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue";
 import { useItemSearchStore } from "@/stores/itemSearch";
+import { usePOSCartStore } from "@/stores/posCart";
 import { usePOSSettingsStore } from "@/stores/posSettings";
 import { useStock } from "@/composables/useStock";
 import { useDialogState } from "@/composables/useDialogState";
@@ -1118,6 +1135,7 @@ function stockBreakdown(item) {
 	return byCompany.map(([abbr, qty]) => `${abbr} ${Math.floor(qty)}`).join(" · ");
 }
 const settingsStore = usePOSSettingsStore();
+const cartStore = usePOSCartStore(); // PPN badge
 const { showError, showWarning } = useToast();
 const { isAnyDialogOpen } = useDialogState();
 

@@ -124,4 +124,40 @@ describe("tax per company", () => {
 		expect(invoice.taxOnGross(126000, CV)).toEqual({ net: 126000, tax: 0, added: 0 });
 		expect(invoice.taxOnGross(72000, PT)).toEqual({ net: 64864.86, tax: 7135.14, added: 0 });
 	});
+
+	describe("PPN badge (rowPpnQty)", () => {
+		it("marks a whole row billed to the PKP company", async () => {
+			await load(PT, { [PT]: [ppn(1)], [CV]: [] }, [row("NP-KMX-1L", 72000, 4)]);
+			expect(invoice.rowPpnQty(invoice.invoiceItems.value[0])).toEqual({ taxed: 4, total: 4 });
+		});
+
+		it("leaves CV stock unmarked, even at a PT cashier", async () => {
+			await load(PT, { [PT]: [ppn(1)], [CV]: [] }, [row("DN-BRL-5KG", 126000, 2)], {
+				"DN-BRL-5KG": [{ company: CV, qty: 2 }],
+			});
+			expect(invoice.rowPpnQty(invoice.invoiceItems.value[0])).toEqual({ taxed: 0, total: 2 });
+		});
+
+		it("counts only the PT part of a row split across companies", async () => {
+			await load(PT, { [PT]: [ppn(1)], [CV]: [] }, [row("CAT", 111000, 5)], {
+				CAT: [
+					{ company: PT, qty: 3 },
+					{ company: CV, qty: 2 },
+				],
+			});
+			expect(invoice.rowPpnQty(invoice.invoiceItems.value[0])).toEqual({ taxed: 3, total: 5 });
+		});
+
+		it("treats a company without tax rows (or unknown) as not PPN", async () => {
+			await load(CV, { [CV]: [] }, [row("DN-BRL-5KG", 100000)]);
+			expect(invoice.isTaxedCompany(CV)).toBe(false);
+			expect(invoice.isTaxedCompany("Lain")).toBe(false);
+			expect(invoice.rowPpnQty(invoice.invoiceItems.value[0]).taxed).toBe(0);
+		});
+
+		it("counts PPN added on top too", async () => {
+			await load(CV, { [CV]: [ppn(0)] }, [row("DN-BRL-5KG", 100000, 2)]);
+			expect(invoice.rowPpnQty(invoice.invoiceItems.value[0])).toEqual({ taxed: 2, total: 2 });
+		});
+	});
 });

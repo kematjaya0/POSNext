@@ -14,6 +14,7 @@ import {
 import { offlineState } from "@/utils/offline/offlineState";
 import { useToast } from "@/composables/useToast";
 import { useStockStore } from "@/stores/stock";
+import { itemHasPpn } from "@/utils/ppn";
 import { call } from "@/utils/apiWrapper";
 import { defineStore } from "pinia";
 import { computed, nextTick, ref, toRaw, watch } from "vue";
@@ -107,6 +108,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		clearCart: clearInvoiceCart,
 		loadTaxRules,
 		setTaxChunks,
+		isTaxedCompany,
+		rowPpnQty,
 		taxOnGross,
 		setDefaultCustomer,
 		applyDiscount,
@@ -2978,6 +2981,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		clearPendingItem,
 		loadTaxRules,
 		taxOnGross,
+		rowPpnQty,
+		itemHasPpn: (item) => itemHasPpn(item, stockStore.scope, isTaxedCompany),
 		submitInvoice,
 		applyDiscountToCart,
 		removeDiscountFromCart,

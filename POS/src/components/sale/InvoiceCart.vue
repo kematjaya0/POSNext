@@ -1083,6 +1083,19 @@
 									>
 										{{ item.item_name }}
 									</h4>
+									<!-- PPN: the row's stock bills to a taxed (PKP) company -->
+									<template v-for="ppn in [cartStore.rowPpnQty(item)]" :key="'ppn'">
+										<span
+											v-if="ppn.taxed > 0"
+											class="inline-flex items-center px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[9px] font-bold flex-shrink-0"
+											:title="
+												ppn.taxed < ppn.total
+													? __('PPN: {0} dari {1}', [ppn.taxed, ppn.total])
+													: __('Kena PPN')
+											"
+											>PPN</span
+										>
+									</template>
 									<!-- GWP / Free Item Badge -->
 									<span
 										v-if="getDisplayFreeQty(item) > 0"

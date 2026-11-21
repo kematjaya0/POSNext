@@ -9,7 +9,7 @@
 			<!-- Main Container -->
 			<div class="fixed inset-0 flex items-center justify-center p-4 md:p-6">
 				<div
-					class="w-full max-w-6xl max-h-[90vh] bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col"
+					class="pos-popup w-full max-w-6xl max-h-[90vh] bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col"
 				>
 					<!-- Header -->
 					<div

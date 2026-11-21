@@ -30,6 +30,14 @@ body {
 	z-index: 500 !important;
 }
 
+/* Semua popup /pos hampir selebar layar, dengan tepi kiri-kanan (keputusan user 2026-11-21):
+   tabel dan lembar Excel di popup butuh ruang. !important mengalahkan max-w-* dari opsi
+   size Dialog frappe-ui; modal buatan sendiri memakai class pos-popup. */
+.dialog-content,
+.pos-popup {
+	max-width: min(95vw, 1400px) !important;
+}
+
 /* Numbers and amounts align right so the ones digit lines up and a stray zero is
    easy to spot. :where() keeps specificity at 0, so a field that asks for another
    alignment (the centered PIN box, the quantity stepper) still wins. */

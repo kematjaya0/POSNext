@@ -247,8 +247,8 @@
 											:key="cellIndex"
 											class="border border-gray-200 px-2 py-1 align-top"
 										>
-											<div>{{ cell.nilai }}</div>
-											<div v-if="cell.hasil" class="text-[11px] text-gray-500">→ {{ cell.hasil }}</div>
+											<div class="whitespace-pre">{{ String(cell.nilai ?? "").trim() }}</div>
+											<div v-if="cell.hasil" class="whitespace-pre text-[11px] text-gray-500">→ {{ cell.hasil }}</div>
 										</td>
 									</tr>
 								</template>

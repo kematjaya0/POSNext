@@ -429,6 +429,25 @@ describe("PemakaianTintaDialog", () => {
 		expect(rows[4][3]).toContain("→ x 2 kaleng = 6.24");
 	});
 
+	it("shows each colorant of a multi-line cell on its own line", async () => {
+		respond({
+			...MACHINE_OK,
+			sheet: {
+				...MACHINE_OK.sheet,
+				columns: [{ huruf: "P", header: "Colorant", peran: ["Tinta"] }],
+				rows: [{ row_no: 2, cells: [{ nilai: "8K1 = 2.9\n8R1 = 0.863\n", hasil: "8K1 2.9\n8R1 0.863" }] }],
+			},
+		});
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		const [value, read] = wrapper.find('[data-test="sheet"]').findAll("tr")[3].findAll("td")[1].findAll("div");
+		expect(value.classes()).toContain("whitespace-pre");
+		expect(value.element.textContent).toBe("8K1 = 2.9\n8R1 = 0.863");
+		expect(read.classes()).toContain("whitespace-pre");
+		expect(read.element.textContent).toBe("→ 8K1 2.9\n8R1 0.863");
+	});
+
 	it("blocks a machine file whose rows have errors", async () => {
 		respond({
 			...MACHINE_OK,

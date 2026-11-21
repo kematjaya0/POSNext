@@ -448,6 +448,29 @@ describe("PemakaianTintaDialog", () => {
 		expect(read.element.textContent).toBe("→ 8K1 2.9\n8R1 0.863");
 	});
 
+	it("explains only the nota statuses found in the file, most urgent first", async () => {
+		const job = MACHINE_OK.jobs[0];
+		respond({
+			...MACHINE_OK,
+			jobs: [
+				{ ...job, no_job: "1", status_cocok: "Cocok", sales_invoice: "SINV-1" },
+				{ ...job, no_job: "2", status_cocok: "Tanpa Nota" },
+				{ ...job, no_job: "3", status_cocok: "Tanpa Nota" },
+			],
+		});
+		const wrapper = await open();
+		await chooseMachineFile(wrapper);
+
+		const section = wrapper.find('[data-test="cek-nota"]');
+		expect(section.text()).toContain("Cek Nota per Job");
+		expect(section.text()).not.toContain("Hasil Cocok dengan Nota");
+		const legend = section.findAll('[data-test="keterangan-status"] li').map((item) => item.text());
+		expect(legend).toHaveLength(2);
+		expect(legend[0]).toMatch(/^Tanpa Nota \(2\): mesin mengaduk cat ini/);
+		expect(legend[0]).toContain("Tidak menghalangi Ajukan");
+		expect(legend[1]).toMatch(/^Cocok \(1\): notanya ada/);
+	});
+
 	it("blocks a machine file whose rows have errors", async () => {
 		respond({
 			...MACHINE_OK,

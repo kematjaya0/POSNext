@@ -324,39 +324,52 @@
 						</table>
 					</div>
 
-					<div v-if="preview.jobs.length" class="max-h-72 overflow-y-auto">
-						<div class="font-semibold text-gray-900 mb-1">{{ __("Hasil Cocok dengan Nota") }}</div>
-						<table class="w-full text-xs">
-							<thead class="text-gray-500 border-b border-gray-200">
-								<tr>
-									<th class="py-1 pe-2 text-start">{{ __("No. Job") }}</th>
-									<th class="py-1 pe-2 text-start">{{ __("Waktu") }}</th>
-									<th class="py-1 pe-2 text-start">{{ __("Warna") }}</th>
-									<th class="py-1 pe-2 text-end">{{ __("Kaleng") }}</th>
-									<th v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end">{{ __("Cost") }}</th>
-									<th class="py-1 pe-2 text-start">{{ __("Nota") }}</th>
-									<th class="py-1 text-start">{{ __("Status") }}</th>
-								</tr>
-							</thead>
-							<tbody>
-								<tr
-									v-for="job in preview.jobs"
-									:key="job.no_job"
-									class="border-b border-gray-50"
-									:class="MATCH_CLASS[job.status_cocok] || ''"
-								>
-									<td class="py-1 pe-2">{{ job.no_job }}</td>
-									<td class="py-1 pe-2 whitespace-nowrap">{{ job.waktu }}</td>
-									<td class="py-1 pe-2">{{ job.warna }}</td>
-									<td class="py-1 pe-2 text-end">{{ job.kaleng }}</td>
-									<td v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end whitespace-nowrap">
-										{{ job.biaya === null ? "-" : money(job.biaya) }}
-									</td>
-									<td class="py-1 pe-2">{{ job.sales_invoice || "-" }}</td>
-									<td class="py-1">{{ job.status_cocok }}</td>
-								</tr>
-							</tbody>
-						</table>
+					<div v-if="preview.jobs.length" class="space-y-2" data-test="cek-nota">
+						<div>
+							<div class="font-semibold text-gray-900">{{ __("Cek Nota per Job") }}</div>
+							<div class="text-xs text-gray-500">
+								{{ __("Setiap cat yang diaduk mesin dicari notanya lewat No. Job yang diketik di nota.") }}
+							</div>
+						</div>
+						<ul class="text-xs space-y-0.5" data-test="keterangan-status">
+							<li v-for="item in matchLegend" :key="item.status">
+								<span class="font-semibold text-gray-900">{{ __(item.status) }}</span>
+								<span class="text-gray-500"> ({{ item.count }})</span>: {{ __(item.text) }}
+							</li>
+						</ul>
+						<div class="max-h-72 overflow-y-auto">
+							<table class="w-full text-xs">
+								<thead class="text-gray-500 border-b border-gray-200">
+									<tr>
+										<th class="py-1 pe-2 text-start">{{ __("No. Job") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Waktu") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Warna") }}</th>
+										<th class="py-1 pe-2 text-end">{{ __("Kaleng") }}</th>
+										<th v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end">{{ __("Cost") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Nota") }}</th>
+										<th class="py-1 text-start">{{ __("Status") }}</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr
+										v-for="job in preview.jobs"
+										:key="job.no_job"
+										class="border-b border-gray-50"
+										:class="MATCH_CLASS[job.status_cocok] || ''"
+									>
+										<td class="py-1 pe-2">{{ job.no_job }}</td>
+										<td class="py-1 pe-2 whitespace-nowrap">{{ job.waktu }}</td>
+										<td class="py-1 pe-2">{{ job.warna }}</td>
+										<td class="py-1 pe-2 text-end">{{ job.kaleng }}</td>
+										<td v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end whitespace-nowrap">
+											{{ job.biaya === null ? "-" : money(job.biaya) }}
+										</td>
+										<td class="py-1 pe-2">{{ job.sales_invoice || "-" }}</td>
+										<td class="py-1">{{ __(job.status_cocok) }}</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
 					</div>
 
 					<div v-if="preview.nota_kurang.length" class="text-xs">
@@ -567,6 +580,15 @@ const IMPORT = "nextend.tinting_import.api";
 const MANUAL = "__manual__";
 const ROW_CLASS = { error: "bg-red-50", warning: "bg-yellow-50", ok: "" };
 const MATCH_CLASS = { "Tanpa Nota": "bg-yellow-50", "Selisih Biaya": "bg-yellow-50" };
+// Urutan = yang perlu dicek dulu di atas. Hanya status yang muncul di file ini yang ditampilkan.
+const MATCH_STATUS = [
+	["Tanpa Nota", "mesin mengaduk cat ini, tapi belum ada nota dengan No. Job-nya. Cek apakah belum dibayar, lupa atau salah ketik No. Job. Tidak menghalangi Ajukan."],
+	["Selisih Biaya", "notanya ada, tapi cost tinta dari mesin berbeda dengan HPP tinta di nota. Cek formula atau tinta di nota."],
+	["Menunggu Nota", "notanya masih draft, belum dibayar. Berubah sendiri setelah nota selesai."],
+	["Cocok", "notanya ada dan cost tinta sama dengan nota."],
+	["Tanpa Biaya", "notanya ada; file mesin ini tidak punya kolom cost, jadi biaya tidak dibandingkan."],
+	["Penyesuaian", "koreksi atau tambahan tinta dari mesin, bukan penjualan baru, jadi tidak dicari notanya."],
+];
 const STATUS_CLASS = {
 	Diajukan: "bg-blue-100 text-blue-700",
 	Tercatat: "bg-blue-100 text-blue-700",
@@ -609,6 +631,15 @@ const reportSampai = ref(today());
 const reportBrand = ref("");
 const reportError = ref("");
 const loadingReport = ref(false);
+const matchLegend = computed(() => {
+	const counts = {};
+	for (const job of preview.value?.jobs || []) counts[job.status_cocok] = (counts[job.status_cocok] || 0) + 1;
+	return MATCH_STATUS.filter(([status]) => counts[status]).map(([status, text]) => ({
+		status,
+		text,
+		count: counts[status],
+	}));
+});
 const reportBrands = computed(() => [...new Set(formats.value.map((machine) => machine.brand))].sort());
 
 const selectedFormat = computed(() => formats.value.find((machine) => machine.name === format.value));

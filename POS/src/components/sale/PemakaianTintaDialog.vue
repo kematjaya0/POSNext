@@ -28,7 +28,7 @@
 							>
 								<option :value="MANUAL">{{ __("Template Manual") }}</option>
 								<option v-for="machine in formats" :key="machine.name" :value="machine.name">
-									{{ machine.name }} · {{ machine.jenis_proses }}
+									{{ formatLabel(machine) }}
 								</option>
 							</select>
 						</label>
@@ -46,22 +46,24 @@
 									</option>
 								</select>
 							</label>
-							<label class="text-xs text-gray-600 flex flex-col gap-1">
-								{{ __("Periode Dari") }}
-								<input
-									v-model="periodeDari"
-									type="date"
-									class="h-8 text-sm border border-gray-300 rounded px-2"
-								/>
-							</label>
-							<label class="text-xs text-gray-600 flex flex-col gap-1">
-								{{ __("Periode Sampai") }}
-								<input
-									v-model="periodeSampai"
-									type="date"
-									class="h-8 text-sm border border-gray-300 rounded px-2"
-								/>
-							</label>
+						</template>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Periode Dari") }}
+							<input
+								v-model="periodeDari"
+								type="date"
+								class="h-8 text-sm border border-gray-300 rounded px-2"
+							/>
+						</label>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Periode Sampai") }}
+							<input
+								v-model="periodeSampai"
+								type="date"
+								class="h-8 text-sm border border-gray-300 rounded px-2"
+							/>
+						</label>
+						<template v-if="format === MANUAL">
 							<a
 								v-if="brand !== null"
 								:href="templateUrl"
@@ -94,9 +96,18 @@
 							)
 						}}
 					</p>
-					<p v-else class="text-xs text-gray-500">
-						{{ __("Upload sore saat closing, setelah semua penjualan hari ini masuk.") }}
-					</p>
+					<template v-else>
+						<p class="text-xs text-gray-500">
+							{{
+								__(
+									"Isi periode pemakaian, lalu pilih file asli dari mesin. Hanya job di periode itu yang diproses. Upload sore saat closing, setelah semua penjualan hari ini masuk."
+								)
+							}}
+						</p>
+						<p v-if="selectedFormat && !cutsStock(selectedFormat)" class="text-xs text-blue-700">
+							{{ __("Format ini hanya mencatat job dan cost. Stok tinta brand ini tetap lewat Template Manual.") }}
+						</p>
+					</template>
 					<p v-if="error" class="text-sm text-red-600">{{ error }}</p>
 					<div v-if="previewing" class="text-sm text-gray-500">{{ __("Membaca file...") }}</div>
 				</div>
@@ -176,68 +187,89 @@
 						<span class="font-semibold">{{ __("Preview") }}</span>
 						<span class="text-gray-700">{{ preview.format.name }}</span>
 						<span class="text-gray-500">
-							{{ preview.format.jenis_proses }} · {{ __("versi {0}", [preview.format.versi]) }}
+							{{ processLabel(preview.format) }} · {{ __("versi {0}", [preview.format.versi]) }}
 						</span>
 					</div>
-					<p
-						v-if="preview.format.jenis_proses === 'Hanya Riwayat'"
-						class="text-xs text-blue-700"
-					>
-						{{ __("Hanya Riwayat, stok tidak berubah") }}
+					<p v-if="!cutsStock(preview.format)" class="text-xs text-blue-700">
+						{{ __("Dicatat saja, stok tidak berubah") }}
 					</p>
 					<ul v-if="preview.errors.length" class="text-sm text-red-600 list-disc ps-5">
 						<li v-for="message in preview.errors" :key="message">{{ message }}</li>
 					</ul>
 
-					<div class="text-xs">
-						<div class="font-semibold text-gray-900 mb-1">{{ __("Kolom file") }}</div>
-						<div class="flex flex-wrap gap-x-3 gap-y-1">
-							<span v-for="column in preview.columns" :key="column.header">
-								<span v-if="column.used" class="text-green-700">
-									{{ column.header }} ({{ __("Diproses") }}{{ column.role ? `: ${column.role}` : "" }})
-								</span>
-								<span v-else class="text-gray-400">
-									{{ column.header }} ({{ __("Tidak dipakai") }})
-								</span>
-							</span>
-						</div>
-					</div>
-
-					<div v-if="preview.sample.rows.length" class="overflow-x-auto text-xs">
-						<div class="font-semibold text-gray-900 mb-1">{{ __("Contoh Baris") }}</div>
-						<table class="w-full">
-							<thead class="text-gray-500 border-b border-gray-200">
+					<div v-if="preview.sheet && preview.sheet.columns.length" class="overflow-x-auto text-xs">
+						<div class="font-semibold text-gray-900 mb-1">{{ __("Isi file yang diproses") }}</div>
+						<table class="border-collapse whitespace-nowrap" data-test="sheet">
+							<tbody>
 								<tr>
+									<th class="border border-gray-200 bg-gray-100 px-2 py-1"></th>
 									<th
-										v-for="header in preview.sample.headers"
-										:key="header"
-										class="py-1 pe-2 text-start whitespace-nowrap"
+										v-for="column in preview.sheet.columns"
+										:key="column.huruf"
+										class="border border-gray-200 bg-gray-100 px-2 py-1 font-medium text-gray-500"
 									>
-										{{ header }}
+										{{ column.huruf }}
 									</th>
 								</tr>
-							</thead>
-							<tbody>
-								<tr v-for="(row, index) in preview.sample.rows" :key="index">
+								<tr>
+									<td class="border border-gray-200 bg-gray-100 px-2 py-1"></td>
 									<td
-										v-for="(cell, cellIndex) in row"
-										:key="cellIndex"
-										class="py-1 pe-2 whitespace-nowrap"
+										v-for="column in preview.sheet.columns"
+										:key="column.huruf"
+										class="border border-gray-200 bg-green-50 px-2 py-1 font-semibold text-gray-900"
 									>
-										{{ cell }}
+										{{ column.peran.join(", ") }}
 									</td>
 								</tr>
+								<tr>
+									<td class="border border-gray-200 bg-gray-100 px-2 py-1 text-center text-gray-500">
+										{{ preview.sheet.baris_header }}
+									</td>
+									<td
+										v-for="column in preview.sheet.columns"
+										:key="column.huruf"
+										class="border border-gray-200 px-2 py-1 font-semibold"
+									>
+										{{ column.header }}
+									</td>
+								</tr>
+								<template v-for="(row, index) in preview.sheet.rows" :key="row.row_no">
+									<tr v-if="row.row_no > previousRow(index) + 1">
+										<td class="border border-gray-200 bg-gray-100 px-2 text-center text-gray-500">…</td>
+										<td :colspan="preview.sheet.columns.length" class="border-y border-gray-200"></td>
+									</tr>
+									<tr>
+										<td class="border border-gray-200 bg-gray-100 px-2 py-1 text-center text-gray-500">
+											{{ row.row_no }}
+										</td>
+										<td
+											v-for="(cell, cellIndex) in row.cells"
+											:key="cellIndex"
+											class="border border-gray-200 px-2 py-1 align-top"
+										>
+											<div>{{ cell.nilai }}</div>
+											<div v-if="cell.hasil" class="text-[11px] text-gray-500">→ {{ cell.hasil }}</div>
+										</td>
+									</tr>
+								</template>
 							</tbody>
 						</table>
 					</div>
 
 					<div class="flex flex-wrap gap-3 text-sm">
 						<span>{{ __("{0} job baru", [preview.counts.baru]) }}</span>
-						<span class="text-gray-500">
-							{{ __("{0} sudah diimpor", [preview.counts.sudah_diimpor]) }}
+						<span>{{ __("{0} kaleng", [preview.counts.kaleng]) }}</span>
+						<span v-if="preview.counts.punya_cost" class="font-semibold">
+							{{ __("Cost {0}", [money(preview.counts.cost)]) }}
 						</span>
 						<span class="text-gray-500">
-							{{ __("{0} sebelum mulai", [preview.counts.sebelum_mulai]) }}
+							{{ __("{0} sudah pernah diunggah", [preview.counts.sudah_diimpor]) }}
+						</span>
+						<span v-if="preview.counts.di_luar_periode" class="text-gray-500">
+							{{ __("{0} di luar periode", [preview.counts.di_luar_periode]) }}
+						</span>
+						<span class="text-gray-500">
+							{{ __("{0} sebelum tanggal hitung", [preview.counts.sebelum_mulai]) }}
 						</span>
 						<span v-if="preview.counts.penyesuaian" class="text-gray-500">
 							{{ __("{0} penyesuaian", [preview.counts.penyesuaian]) }}
@@ -300,6 +332,8 @@
 									<th class="py-1 pe-2 text-start">{{ __("No. Job") }}</th>
 									<th class="py-1 pe-2 text-start">{{ __("Waktu") }}</th>
 									<th class="py-1 pe-2 text-start">{{ __("Warna") }}</th>
+									<th class="py-1 pe-2 text-end">{{ __("Kaleng") }}</th>
+									<th v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end">{{ __("Cost") }}</th>
 									<th class="py-1 pe-2 text-start">{{ __("Nota") }}</th>
 									<th class="py-1 text-start">{{ __("Status") }}</th>
 								</tr>
@@ -314,6 +348,10 @@
 									<td class="py-1 pe-2">{{ job.no_job }}</td>
 									<td class="py-1 pe-2 whitespace-nowrap">{{ job.waktu }}</td>
 									<td class="py-1 pe-2">{{ job.warna }}</td>
+									<td class="py-1 pe-2 text-end">{{ job.kaleng }}</td>
+									<td v-if="preview.counts.punya_cost" class="py-1 pe-2 text-end whitespace-nowrap">
+										{{ job.biaya === null ? "-" : money(job.biaya) }}
+									</td>
 									<td class="py-1 pe-2">{{ job.sales_invoice || "-" }}</td>
 									<td class="py-1">{{ job.status_cocok }}</td>
 								</tr>
@@ -347,9 +385,9 @@
 							{{ __("Ajukan") }}
 						</Button>
 					</div>
-					<p v-if="!preview.can_submit" class="text-xs text-red-600">
-						{{ __("File belum bisa diajukan - hubungi Stock Manager bila formatnya berubah.") }}
-					</p>
+					<ul v-if="!preview.can_submit" class="text-xs text-red-600 list-disc ps-5" data-test="alasan">
+						<li v-for="reason in preview.alasan" :key="reason">{{ reason }}</li>
+					</ul>
 				</div>
 
 				<!-- History -->
@@ -453,6 +491,8 @@ const formats = ref([]);
 const brand = ref(null);
 const format = ref(MANUAL);
 
+const selectedFormat = computed(() => formats.value.find((machine) => machine.name === format.value));
+
 const templateUrl = computed(
 	() =>
 		`/api/method/${METHOD}.download_template?warehouse=${encodeURIComponent(warehouse.value)}` +
@@ -479,8 +519,29 @@ watch(warehouse, () => {
 });
 watch(format, () => resetUpload());
 watch([brand, periodeDari, periodeSampai], () => {
-	if (fileUrl.value && brand.value !== null) runPreview();
+	if (!fileUrl.value || !periodeDari.value || !periodeSampai.value) return;
+	if (format.value !== MANUAL || brand.value !== null) runPreview();
 });
+
+function cutsStock(machine) {
+	return machine?.jenis_proses === "Potong Stok";
+}
+
+function processLabel(machine) {
+	return cutsStock(machine) ? __("memotong stok tinta") : __("dicatat saja, stok tidak berubah");
+}
+
+function formatLabel(machine) {
+	return `${machine.name} — ${processLabel(machine)}`;
+}
+
+function money(value) {
+	return Number(value || 0).toLocaleString("id-ID", { maximumFractionDigits: 2 });
+}
+
+function previousRow(index) {
+	return index ? preview.value.sheet.rows[index - 1].row_no : preview.value.sheet.baris_header;
+}
 
 function brandLabel(name) {
 	return name || __("(Tanpa Brand)");
@@ -542,6 +603,11 @@ async function onFileChosen(event) {
 		event.target.value = "";
 		return;
 	}
+	if (format.value !== MANUAL && (!periodeDari.value || !periodeSampai.value)) {
+		error.value = __("Isi periode dulu sebelum memilih file.");
+		event.target.value = "";
+		return;
+	}
 	previewing.value = true;
 	try {
 		fileUrl.value = await uploadFile(file);
@@ -570,6 +636,8 @@ async function runPreview() {
 						format_name: format.value,
 						warehouse: warehouse.value,
 						file_url: fileUrl.value,
+						periode_dari: periodeDari.value,
+						periode_sampai: periodeSampai.value,
 					});
 	} catch (err) {
 		preview.value = null;
@@ -595,6 +663,8 @@ async function submitUpload() {
 				format_name: format.value,
 				warehouse: warehouse.value,
 				file_url: fileUrl.value,
+				periode_dari: periodeDari.value,
+				periode_sampai: periodeSampai.value,
 			});
 		}
 		resetUpload();

@@ -16,7 +16,7 @@
 				</div>
 
 				<!-- New upload -->
-				<div class="border border-gray-200 rounded-lg p-3 flex flex-col gap-2">
+				<div class="border border-gray-200 rounded-lg p-3 flex flex-col gap-2" data-test="upload">
 					<div class="text-sm font-semibold text-gray-900">{{ __("Upload Baru") }}</div>
 					<div class="flex flex-wrap items-end gap-2">
 						<label class="text-xs text-gray-600 flex flex-col gap-1">
@@ -439,6 +439,119 @@
 						</div>
 					</div>
 				</div>
+
+				<!-- Laporan -->
+				<div class="border border-gray-200 rounded-lg p-3 flex flex-col gap-2" data-test="laporan">
+					<div class="text-sm font-semibold text-gray-900">{{ __("Laporan Pemakaian Tinta") }}</div>
+					<div class="flex flex-wrap items-end gap-2">
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Dari") }}
+							<input v-model="reportDari" type="date" class="h-8 text-sm border border-gray-300 rounded px-2" />
+						</label>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Sampai") }}
+							<input v-model="reportSampai" type="date" class="h-8 text-sm border border-gray-300 rounded px-2" />
+						</label>
+						<label class="text-xs text-gray-600 flex flex-col gap-1">
+							{{ __("Brand") }}
+							<select
+								v-model="reportBrand"
+								class="h-8 text-sm border border-gray-300 rounded px-2"
+								:aria-label="__('Brand Laporan')"
+							>
+								<option value="">{{ __("Semua") }}</option>
+								<option v-for="name in reportBrands" :key="name" :value="name">{{ name }}</option>
+							</select>
+						</label>
+						<Button variant="subtle" :loading="loadingReport" @click="loadReport">
+							{{ __("Tampilkan") }}
+						</Button>
+					</div>
+					<p v-if="reportError" class="text-sm text-red-600">{{ reportError }}</p>
+					<p v-else-if="report && !report.brands.length" class="text-sm text-gray-500">
+						{{ __("Belum ada pemakaian tinta yang diunggah pada periode ini.") }}
+					</p>
+					<div
+						v-for="entry in report?.brands || []"
+						:key="entry.brand"
+						class="border-t border-gray-100 pt-2 flex flex-col gap-2"
+						data-test="laporan-brand"
+					>
+						<div class="flex flex-wrap items-center gap-3 text-sm">
+							<span class="font-semibold text-gray-900">{{ entry.brand }}</span>
+							<span class="text-gray-500">
+								{{ entry.potong_stok ? __("memotong stok tinta") : __("dicatat saja") }}
+							</span>
+							<span>{{ __("{0} job", [entry.jobs]) }}</span>
+							<span>{{ __("{0} kaleng", [entry.kaleng]) }}</span>
+							<span class="font-semibold">
+								{{ __("Cost {0}", [entry.punya_cost ? money(entry.cost) : "-"]) }}
+							</span>
+						</div>
+						<table v-if="entry.tinta.length" class="w-full text-xs">
+							<thead class="text-gray-500 border-b border-gray-200">
+								<tr>
+									<th class="py-1 pe-2 text-start">{{ __("Kode") }}</th>
+									<th class="py-1 pe-2 text-start">{{ __("Item") }}</th>
+									<th class="py-1 pe-2 text-end">{{ __("Jumlah Mesin") }}</th>
+									<th class="py-1 pe-2 text-end">{{ __("Faktor") }}</th>
+									<th class="py-1 pe-2 text-end">{{ __("Qty Stok") }}</th>
+									<th class="py-1 text-end">{{ __("Job") }}</th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr
+									v-for="row in entry.tinta"
+									:key="`${row.kode}-${row.item_code}-${row.faktor}`"
+									class="border-b border-gray-50"
+								>
+									<td class="py-1 pe-2">{{ row.kode }}</td>
+									<td class="py-1 pe-2">{{ row.item_name || row.item_code }}</td>
+									<td class="py-1 pe-2 text-end whitespace-nowrap">
+										{{ row.jumlah_mesin }} {{ row.satuan_mesin || "" }}
+									</td>
+									<td class="py-1 pe-2 text-end">{{ row.faktor }}</td>
+									<td class="py-1 pe-2 text-end whitespace-nowrap">{{ row.qty_stok }} {{ row.stock_uom || "" }}</td>
+									<td class="py-1 text-end">{{ row.jobs }}</td>
+								</tr>
+							</tbody>
+						</table>
+						<p v-else class="text-xs text-gray-500">
+							{{ __("Tanpa rincian tinta: format brand ini hanya mencatat job.") }}
+						</p>
+						<details class="text-xs">
+							<summary class="cursor-pointer text-gray-700">
+								{{ __("Daftar job ({0})", [entry.daftar_job_total]) }}
+							</summary>
+							<table class="w-full mt-1">
+								<thead class="text-gray-500 border-b border-gray-200">
+									<tr>
+										<th class="py-1 pe-2 text-start">{{ __("No. Job") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Waktu") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Warna") }}</th>
+										<th class="py-1 pe-2 text-end">{{ __("Kaleng") }}</th>
+										<th class="py-1 pe-2 text-end">{{ __("Cost") }}</th>
+										<th class="py-1 pe-2 text-start">{{ __("Nota") }}</th>
+										<th class="py-1 text-start">{{ __("No. Upload") }}</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr v-for="job in entry.daftar_job" :key="job.no_job" class="border-b border-gray-50">
+										<td class="py-1 pe-2">{{ job.no_job }}</td>
+										<td class="py-1 pe-2 whitespace-nowrap">{{ job.waktu }}</td>
+										<td class="py-1 pe-2">{{ job.warna }}</td>
+										<td class="py-1 pe-2 text-end">{{ job.kaleng }}</td>
+										<td class="py-1 pe-2 text-end whitespace-nowrap">
+											{{ job.cost === null ? "-" : money(job.cost) }}
+										</td>
+										<td class="py-1 pe-2">{{ job.sales_invoice || "-" }}</td>
+										<td class="py-1">{{ job.impor }}</td>
+									</tr>
+								</tbody>
+							</table>
+						</details>
+					</div>
+				</div>
 			</div>
 		</template>
 	</Dialog>
@@ -490,6 +603,13 @@ const formats = ref([]);
 // null = not chosen yet; "" = tinta without a brand.
 const brand = ref(null);
 const format = ref(MANUAL);
+const report = ref(null);
+const reportDari = ref(today());
+const reportSampai = ref(today());
+const reportBrand = ref("");
+const reportError = ref("");
+const loadingReport = ref(false);
+const reportBrands = computed(() => [...new Set(formats.value.map((machine) => machine.brand))].sort());
 
 const selectedFormat = computed(() => formats.value.find((machine) => machine.name === format.value));
 
@@ -515,6 +635,7 @@ watch(
 watch(show, (value) => emit("update:modelValue", value));
 watch(warehouse, () => {
 	resetUpload();
+	report.value = null;
 	loadUploads();
 });
 watch(format, () => resetUpload());
@@ -522,6 +643,30 @@ watch([brand, periodeDari, periodeSampai], () => {
 	if (!fileUrl.value || !periodeDari.value || !periodeSampai.value) return;
 	if (format.value !== MANUAL || brand.value !== null) runPreview();
 });
+
+function today() {
+	const now = new Date();
+	const pad = (value) => String(value).padStart(2, "0");
+	return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+async function loadReport() {
+	loadingReport.value = true;
+	reportError.value = "";
+	try {
+		report.value = await call(`${IMPORT}.report`, {
+			warehouse: warehouse.value,
+			periode_dari: reportDari.value,
+			periode_sampai: reportSampai.value,
+			brand: reportBrand.value || null,
+		});
+	} catch (err) {
+		report.value = null;
+		reportError.value = messageOf(err);
+	} finally {
+		loadingReport.value = false;
+	}
+}
 
 function cutsStock(machine) {
 	return machine?.jenis_proses === "Potong Stok";

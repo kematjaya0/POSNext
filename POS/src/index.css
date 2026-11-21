@@ -30,12 +30,19 @@ body {
 	z-index: 500 !important;
 }
 
-/* Semua popup /pos hampir selebar layar, dengan tepi kiri-kanan (keputusan user 2026-11-21):
-   tabel dan lembar Excel di popup butuh ruang. !important mengalahkan max-w-* dari opsi
-   size Dialog frappe-ui; modal buatan sendiri memakai class pos-popup. */
+/* Lebar semua popup /pos (keputusan user 2026-11-21): 71% layar, maksimal 1050px; di HP 95%
+   supaya tidak sempit. !important mengalahkan max-w-* dari opsi size Dialog frappe-ui;
+   modal buatan sendiri memakai class pos-popup. */
 .dialog-content,
 .pos-popup {
-	max-width: min(95vw, 1400px) !important;
+	max-width: min(95vw, 1050px) !important;
+}
+
+@media (min-width: 768px) {
+	.dialog-content,
+	.pos-popup {
+		max-width: min(71vw, 1050px) !important;
+	}
 }
 
 /* Numbers and amounts align right so the ones digit lines up and a stray zero is

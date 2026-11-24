@@ -39,7 +39,7 @@ export function useSalesApprovalPreview(props, formatItems) {
 				preview.value = result?.message || result || emptyPreview()
 		} catch (error) {
 			log.debug("Sales approval pre-check failed:", error)
-			if (current === revision) preview.value = emptyPreview()
+			if (current === revision) preview.value = {...emptyPreview(), error: error.message || __("Pemeriksaan harga belum berhasil.")}
 		}
 	}
 

@@ -291,6 +291,7 @@ export function useInvoice() {
 			const newItem = {
 				item_code: item.item_code,
 				item_name: item.item_name,
+				custom_selling_price_list: item.custom_selling_price_list || null,
 				rate: item.rate || item.price_list_rate || 0,
 				price_list_rate: item.price_list_rate || item.rate || 0,
 				quantity: quantity,
@@ -1061,6 +1062,7 @@ export function useInvoice() {
 		const mapRow = (item, qtyOverride = null) => ({
 			item_code: item.item_code,
 			item_name: item.item_name,
+			custom_selling_price_list: item.custom_selling_price_list || null,
 			qty: qtyOverride ?? item.quantity ?? item.qty ?? 1,
 			rate: item.is_free_item ? 0 : computeBackendRate(item),
 			price_list_rate: item.is_free_item
@@ -1147,6 +1149,7 @@ export function useInvoice() {
 					out.push({
 						item_code: item.item_code,
 						item_name: item.item_name,
+						custom_selling_price_list: item.custom_selling_price_list || null,
 						qty: fq,
 						rate: 0,
 						price_list_rate: 0,

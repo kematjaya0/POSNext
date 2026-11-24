@@ -13,6 +13,7 @@ from erpnext.stock.doctype.batch.batch import get_batch_no, get_batch_qty
 from frappe import _
 from frappe.utils import cint, cstr, flt, get_datetime, nowdate, nowtime
 
+from pos_next.api.utilities import get_selling_price_list
 from pos_next.pos_next.doctype.pos_coupon.pos_coupon import INVOICE_COUPON_FIELD
 from pos_next.promotions.engine import (
 	CROSS_CART_MODES,
@@ -60,16 +61,13 @@ try:
 	from erpnext.accounts.doctype.pricing_rule.utils import (
 		get_applied_pricing_rules as erpnext_get_applied_pricing_rules,
 	)
-	from pos_next.overrides.pricing_rule import apply_min_max_price_discounts
-	from pos_next.api.promotion_exclusions import (
-		DISCOUNT_SOURCE_AUTO,
-		DISCOUNT_SOURCE_FREE_ITEM,
-		DISCOUNT_SOURCE_GWP,
-		DISCOUNT_SOURCE_MANUAL,
-		PROMOTION_TYPE_AUTO,
-		PROMOTION_TYPE_ITEM_LEVEL,
-		get_rule_promotion_types,
-		mark_item_discount_flags,
+
+	from pos_next.api.gift_pool import (
+		PROMOTION_TYPE_GIFT_POOL,
+		allocate_gift_pool_free_items,
+		expanded_groups,
+		get_scheme_gift_pool_qtys,
+		get_scheme_gift_pools,
 	)
 	from pos_next.api.gwp import (
 		GWP_BASIS_MAX,
@@ -80,17 +78,21 @@ try:
 		item_matches_pricing_rule_apply_on,
 		should_aggregate_gwp_quantities,
 	)
-	from pos_next.api.gift_pool import (
-		PROMOTION_TYPE_GIFT_POOL,
-		allocate_gift_pool_free_items,
-		expanded_groups,
-		get_scheme_gift_pool_qtys,
-		get_scheme_gift_pools,
-	)
 	from pos_next.api.product_free import (
 		compute_product_recursive_free_qty,
 		should_aggregate_product_quantities,
 	)
+	from pos_next.api.promotion_exclusions import (
+		DISCOUNT_SOURCE_AUTO,
+		DISCOUNT_SOURCE_FREE_ITEM,
+		DISCOUNT_SOURCE_GWP,
+		DISCOUNT_SOURCE_MANUAL,
+		PROMOTION_TYPE_AUTO,
+		PROMOTION_TYPE_ITEM_LEVEL,
+		get_rule_promotion_types,
+		mark_item_discount_flags,
+	)
+	from pos_next.overrides.pricing_rule import apply_min_max_price_discounts
 except Exception as _pricing_import_error:  # pragma: no cover - ERPNext not installed in some environments
 	import traceback
 
@@ -4072,7 +4074,7 @@ def apply_offers(invoice_data, selected_offers=None):
 				"currency": invoice.get("currency") or profile.get("currency") or company_currency,
 				"conversion_rate": flt(invoice.get("conversion_rate") or 1) or 1,
 				"plc_conversion_rate": flt(invoice.get("plc_conversion_rate") or 1) or 1,
-				"price_list": invoice.get("price_list") or profile.get("selling_price_list"),
+				"price_list": get_selling_price_list(profile),
 				"customer": customer,
 				"customer_group": customer_group,
 				"territory": territory,

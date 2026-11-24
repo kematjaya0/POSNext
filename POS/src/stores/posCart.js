@@ -2401,6 +2401,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 
 			// Apply other updates
+			if (updates.custom_selling_price_list !== undefined)
+				cartItem.custom_selling_price_list = updates.custom_selling_price_list;
 			if (updates.quantity !== undefined) cartItem.quantity = updates.quantity;
 			if (updates.warehouse !== undefined) cartItem.warehouse = updates.warehouse;
 			if (updates.warehouse_manual) cartItem.warehouse_manual = true;

@@ -88,3 +88,27 @@ describe("open price", () => {
 		});
 	});
 });
+
+describe("per-item price list payload", () => {
+	it("keeps different price lists on different rows, including warehouse chunks", () => {
+		setActivePinia(createPinia());
+		const invoice = useInvoice();
+		const rows = invoice.formatItemsForSubmission([
+			{ ...BASE, custom_selling_price_list: "Regional Normal" },
+			{
+				...BASE,
+				item_code: "OTHER",
+				custom_selling_price_list: "Special Any Name",
+				pos_order_chunks: [
+					{ warehouse: "W1", qty: 1 },
+					{ warehouse: "W2", qty: 1 },
+				],
+			},
+		]);
+		expect(rows.map((r) => r.custom_selling_price_list)).toEqual([
+			"Regional Normal",
+			"Special Any Name",
+			"Special Any Name",
+		]);
+	});
+});

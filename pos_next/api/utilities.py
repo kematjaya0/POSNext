@@ -100,3 +100,12 @@ def is_wallet_payment_mode(mode_of_payment):
 		return False
 
 	return cint(frappe.get_cached_value("Mode of Payment", mode_of_payment, "is_wallet_payment"))
+
+
+def get_selling_price_list(profile):
+	"""Allow installed apps to select the selling branch's normal price list."""
+	for method in frappe.get_hooks('pos_next_selling_price_list'):
+		price_list = frappe.get_attr(method)(profile)
+		if price_list:
+			return price_list
+	return profile.get('selling_price_list')

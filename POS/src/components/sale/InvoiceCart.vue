@@ -1419,6 +1419,8 @@
 								</div>
 							</div>
 
+							<ItemPriceListPicker v-if="!item.is_free_item && !cartStore.posOrder" :item="item" :pos-profile="posProfile" :currency="currency" />
+
 							<!-- Warehouses the row ships from (saleSplit), one line each -->
 							<template v-for="parts in [rowAllocation(item)]" :key="'allocation'">
 								<div
@@ -1641,6 +1643,7 @@
 				</div>
 			</div>
 
+			<p v-if="approvalPreview.error" class="mb-2 rounded border border-red-300 bg-red-50 p-2 text-xs text-red-800" role="alert">{{ approvalPreview.error }}</p>
 			<!-- Sales Approval pre-check (nextend) -->
 			<div
 				v-if="approvalPreview.needs_approval"
@@ -1819,6 +1822,7 @@ import { FeatherIcon } from "frappe-ui";
 import { createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import EditItemDialog from "./EditItemDialog.vue";
+import ItemPriceListPicker from "./ItemPriceListPicker.vue";
 
 /**
  * ============================================================================

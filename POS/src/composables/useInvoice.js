@@ -8,6 +8,7 @@ import { roundCurrency } from "@/utils/currency";
 import { getAddonCarrierItem } from "@/utils/itemAddons";
 import { generateUUID } from "@/utils/offline/uuid";
 import { saleRowKey } from "@/utils/saleSplit";
+import { getSelectedUomPrice } from "@/utils/itemPricing";
 
 const log = logger.create("Invoice");
 
@@ -141,6 +142,8 @@ export function useInvoice() {
 	 * @returns {Promise<{rate: number, price_list_rate: number}>}
 	 */
 	async function resolveUomPricing(item, uom, conversionFactor, qty) {
+		const selectedPrice = await getSelectedUomPrice(item, posProfile.value, uom);
+		if (selectedPrice) return selectedPrice;
 		// When online, fetch server pricing for customer-specific rates
 		if (!isOffline()) {
 			try {
@@ -1660,6 +1663,7 @@ export function useInvoice() {
 			const item = {
 				item_code: row.item_code,
 				item_name: row.item_name || row.item_code,
+				custom_selling_price_list: row.custom_selling_price_list || null,
 				rate: priceListRate,
 				price_list_rate: priceListRate,
 				quantity: row.qty,

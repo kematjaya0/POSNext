@@ -74,6 +74,15 @@ afterEach(() => {
 })
 
 describe("sales approval preview", () => {
+	it("rechecks a list change even when its rate stays the same", async () => {
+		props.items[0].custom_selling_price_list = "Normal"
+		await tick()
+		props.items[0].custom_selling_price_list = "Special"
+		await tick()
+		expect(JSON.parse(submit.mock.calls.at(-1)[0].items)[0].custom_selling_price_list).toBe("Special")
+		expect(submit).toHaveBeenCalledTimes(2)
+	})
+
 	it("keeps B's Rp4.000 discount on B using the actual submit formatter", async () => {
 		await tick()
 		const payload = submit.mock.calls[0][0]

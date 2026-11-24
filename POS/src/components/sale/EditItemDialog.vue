@@ -350,6 +350,16 @@
 												</div>
 											</div>
 
+											<ItemPriceListPicker
+												v-if="show && localItem && !localItem.is_free_item"
+												editable :disabled="isLoadingUomPrice" :item="pricingDraft" :pos-profile="posProfile || editItemPosProfile" :currency="currency"
+												:effective-rate="effectiveLocalPrice"
+												@select-price="selectLocalPrice"
+												@reference-change="localItem.custom_selling_price_list = $event.price_list"
+												@context-change="setLocalPriceContext"
+												@loading-change="isLoadingPriceLists = $event"
+											/>
+
 											<!-- Item Discount Section (only if allowed by POS Profile) -->
 											<div
 												v-if="canEditItemDiscount"
@@ -482,6 +492,7 @@
 								</div>
 							</div>
 
+							<p v-if="uomPriceError" class="px-6 text-sm text-red-600" role="alert">{{ uomPriceError }}</p>
 							<!-- Actions - matching frappe-ui Dialog style -->
 							<div class="px-4 pb-7 pt-4 sm:px-6">
 								<div class="flex items-center justify-end gap-2">
@@ -491,7 +502,7 @@
 									<Button
 										variant="solid"
 										@click="updateItem"
-										:disabled="!hasStock || isCheckingStock"
+										:disabled="!hasStock || isCheckingStock || isLoadingUomPrice || isLoadingPriceLists || !!uomPriceError"
 									>
 										<span v-if="isCheckingStock">{{
 											__("Checking Stock...")
@@ -526,10 +537,13 @@ import {
 } from "@/utils/currency";
 import { call } from "@/utils/apiWrapper";
 import { isOpenPriceItem } from "@/utils/itemAddons";
+import { getSelectedUomPrice } from "@/utils/itemPricing";
 import { Button, FeatherIcon, createResource } from "frappe-ui";
 import { computed, ref, watch } from "vue";
 import SelectInput from "@/components/common/SelectInput.vue";
 import WarehouseStockList from "./WarehouseStockList.vue";
+import ItemPriceListPicker from "./ItemPriceListPicker.vue";
+import { pricingDiscountFactor } from "@/utils/itemPricing";
 
 const { showSuccess, showError, showWarning } = useToast();
 const settingsStore = usePOSSettingsStore();
@@ -582,6 +596,10 @@ function isItemCoveredByOffer(item, offers, qty) {
 const props = defineProps({
 	modelValue: Boolean,
 	item: Object,
+	posProfile: String,
+	pricingTotal: {type: Number, default: 0},
+	originalItemTotal: {type: Number, default: 0},
+	additionalDiscount: {type: Number, default: 0},
 	warehouses: {
 		type: Array,
 		default: () => [],
@@ -599,6 +617,29 @@ const localItem = ref(null);
 const localQuantity = ref(1);
 const localUom = ref("");
 const localRate = ref(0);
+const isLoadingPriceLists = ref(false);
+const pricingDraft = computed(() => ({...localItem.value, uom: localItem.value?.uom || localUom.value, rate: localRate.value}));
+const effectiveLocalPrice = computed(() => {
+	const total = Math.max(0, props.pricingTotal - props.originalItemTotal + calculatedTotal.value);
+	return (localQuantity.value > 0 ? calculatedTotal.value / localQuantity.value : 0)
+		* pricingDiscountFactor(total, props.additionalDiscount);
+});
+function setLocalPriceContext(context) {
+	localItem.value.pricing_context = context;
+	localItem.value.pricing_territory = context.territory;
+}
+function selectLocalPrice(option) {
+	localItem.value.custom_selling_price_list = option.price_list;
+	if (option.rate != null) {
+		localRate.value = Number(option.rate);
+		originalPriceListRate.value = Number(option.rate);
+		if (!hasPricingRules.value) {
+			discountValue.value = 0;
+			discountType.value = "percentage";
+		}
+		calculateTotals();
+	}
+}
 const localWarehouse = ref("");
 // The cashier chose the warehouse here: the row stops being auto-allocated
 const warehousePickedByHand = ref(false);
@@ -612,6 +653,8 @@ const hasStock = ref(true);
 const isCheckingStock = ref(false);
 const isInitializingItem = ref(false);
 const uomRateRequestId = ref(0);
+const isLoadingUomPrice = ref(false);
+const uomPriceError = ref("");
 const localSerials = ref([]); // List of serial numbers for this item
 const removedSerials = ref([]); // Track serials removed during this edit session
 const originalSerials = ref([]); // Original serials when dialog opened
@@ -732,7 +775,7 @@ const uomOptions = computed(() => {
 // POS Profile used to scope the WarehouseStockList query - same resolution
 // as getRateForUom() below (settings override, else the item's own profile)
 const editItemPosProfile = computed(
-	() => settingsStore.settings?.pos_profile || localItem.value?.pos_profile
+	() => props.posProfile || shiftStore.currentProfile?.name || settingsStore.settings?.pos_profile || localItem.value?.pos_profile
 );
 
 // What the branch must cover in the edited UOM: this row's qty plus the
@@ -757,6 +800,9 @@ const discountTypeOptions = computed(() => [
 watch(
 	() => props.item,
 	(newItem) => {
+		++uomRateRequestId.value;
+		isLoadingUomPrice.value = false;
+		uomPriceError.value = "";
 		if (newItem) {
 			isInitializingItem.value = true;
 			localItem.value = { ...newItem };
@@ -821,7 +867,7 @@ watch(
 watch(localUom, (newUom, oldUom) => {
 	if (!newUom || newUom === oldUom || isInitializingItem.value) return;
 	handleUomChange(newUom);
-});
+}, { flush: "sync" });
 
 // Re-evaluate promo lock when qty changes (e.g. 1 → editable, 2–5 → locked)
 watch(localQuantity, (newQty) => {
@@ -912,7 +958,9 @@ async function getRateForUom(uom) {
 	if (!localItem.value) return 0;
 
 	// Primary source: fetch exact price_list_rate for selected UOM from backend.
-	const posProfile = settingsStore.settings?.pos_profile || localItem.value.pos_profile;
+	const posProfile = shiftStore.currentProfile?.name || settingsStore.settings?.pos_profile || localItem.value.pos_profile;
+	const selectedPrice = await getSelectedUomPrice(localItem.value, posProfile, uom, props.currency);
+	if (selectedPrice) return selectedPrice.rate;
 	if (localItem.value.item_code && posProfile) {
 		try {
 			const itemDetails = await getItemDetailsResource.submit({
@@ -947,22 +995,26 @@ async function handleUomChange(newUom) {
 	}
 
 	const requestId = ++uomRateRequestId.value;
-	const fetchedRate = await getRateForUom(selectedUom);
-	// Ignore stale responses if user changes UOM repeatedly.
-	if (requestId !== uomRateRequestId.value) return;
-
-	const newRate = roundCurrency(fetchedRate);
-	const newConversionFactor = getConversionFactorForUom(selectedUom);
-
-	// Keep local state consistent so update payload has correct UOM pricing metadata.
-	localRate.value = newRate;
-	originalPriceListRate.value = newRate;
-	localItem.value.uom = selectedUom;
-	localItem.value.conversion_factor = newConversionFactor;
-	localItem.value.rate = newRate;
-	localItem.value.price_list_rate = newRate;
-
-	calculateTotals();
+	isLoadingUomPrice.value = true;
+	uomPriceError.value = "";
+	try {
+		const fetchedRate = await getRateForUom(selectedUom);
+		if (requestId !== uomRateRequestId.value) return;
+		const newRate = roundCurrency(fetchedRate);
+		localRate.value = newRate;
+		originalPriceListRate.value = newRate;
+		localItem.value.uom = selectedUom;
+		localItem.value.conversion_factor = getConversionFactorForUom(selectedUom);
+		localItem.value.rate = newRate;
+		localItem.value.price_list_rate = newRate;
+		calculateTotals();
+	} catch (error) {
+		if (requestId === uomRateRequestId.value) {
+			uomPriceError.value = error.message || __("Harga satuan belum dapat dimuat.");
+		}
+	} finally {
+		if (requestId === uomRateRequestId.value) isLoadingUomPrice.value = false;
+	}
 }
 
 async function handleWarehouseChange() {
@@ -1062,6 +1114,7 @@ function formatCurrency(amount) {
 }
 
 function updateItem() {
+	if (isLoadingUomPrice.value || isLoadingPriceLists.value || uomPriceError.value) return;
 	// Check if rate was manually edited
 	const isRateManuallyEdited = localRate.value !== originalPriceListRate.value;
 

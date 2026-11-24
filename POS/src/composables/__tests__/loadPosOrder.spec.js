@@ -29,6 +29,13 @@ const ORDER = {
 };
 
 describe("loadPosOrder", () => {
+	it("keeps a saved price list when loading an order", () => {
+		setActivePinia(createPinia());
+		const invoice = useInvoice();
+		invoice.loadPosOrder({...ORDER, items: [{...ORDER.items[0], custom_selling_price_list: "Harga Spesial"}]});
+		expect(invoice.formatItemsForSubmission(invoice.invoiceItems.value)[0].custom_selling_price_list).toBe("Harga Spesial");
+	});
+
 	let invoice;
 	beforeEach(() => {
 		setActivePinia(createPinia());

@@ -2297,6 +2297,10 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @returns {number} New total quantity
 	 */
 	function mergeItems(sourceItem, targetItem, quantity) {
+		const normal = usePOSShiftStore().currentProfile?.selling_price_list;
+		if ((sourceItem.custom_selling_price_list || normal) !== (targetItem.custom_selling_price_list || normal)) {
+			throw new Error(__("Samakan Price List kedua baris sebelum menggabungkan satuan."));
+		}
 		targetItem.quantity += quantity;
 		recalculateItem(targetItem);
 		removeCartItem(sourceItem);
@@ -2319,6 +2323,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		cartItem.conversion_factor = conversionFactor;
 		cartItem.rate = pricing.rate;
 		cartItem.price_list_rate = pricing.price_list_rate;
+		cartItem.is_rate_manually_edited = 0;
+		cartItem.original_rate = null;
 	}
 
 	/**
@@ -2381,7 +2387,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 						updates.uom,
 						updates.quantity ?? cartItem.quantity
 					);
-				} catch {
+				} catch (error) {
+					if (cartItem.custom_selling_price_list) throw error;
 					// Fallback: just change UOM without rate update
 					cartItem.uom = updates.uom;
 				}
@@ -2400,6 +2407,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				}
 			}
 
+			if (updates.pricing_context !== undefined) cartItem.pricing_context = updates.pricing_context;
+			if (updates.pricing_territory !== undefined) cartItem.pricing_territory = updates.pricing_territory;
 			// Apply other updates
 			if (updates.custom_selling_price_list !== undefined)
 				cartItem.custom_selling_price_list = updates.custom_selling_price_list;

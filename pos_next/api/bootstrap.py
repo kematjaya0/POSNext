@@ -31,6 +31,7 @@ from frappe.query_builder.functions import Coalesce
 from frappe.utils import get_system_timezone
 
 from pos_next.api.constants import DEFAULT_POS_SETTINGS, POS_SETTINGS_FIELDS
+from pos_next.api.utilities import get_selling_price_list
 
 
 @frappe.whitelist()
@@ -93,7 +94,7 @@ def get_initial_data():
 		"company": pos_profile.company,
 		"currency": pos_profile.currency,
 		"warehouse": pos_profile.warehouse,
-		"selling_price_list": pos_profile.selling_price_list,
+		"selling_price_list": get_selling_price_list(pos_profile),
 		"customer": pos_profile.customer,
 		"write_off_account": pos_profile.write_off_account,
 		"write_off_cost_center": pos_profile.write_off_cost_center,

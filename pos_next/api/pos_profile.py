@@ -6,7 +6,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 
-from pos_next.api.utilities import _parse_list_parameter, check_user_company
+from pos_next.api.utilities import _parse_list_parameter, check_user_company, get_selling_price_list
 
 
 @frappe.whitelist()
@@ -41,6 +41,7 @@ def get_pos_profile_data(pos_profile):
 		frappe.throw(_("You don't have access to this POS Profile"))
 
 	profile_doc = frappe.get_doc("POS Profile", pos_profile)
+	profile_doc.selling_price_list = get_selling_price_list(profile_doc)
 	company_doc = frappe.get_doc("Company", profile_doc.company)
 
 	# Get POS Settings for this profile

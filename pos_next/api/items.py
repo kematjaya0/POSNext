@@ -13,6 +13,8 @@ from frappe.query_builder import functions as fn
 from frappe.query_builder.functions import IfNull
 from frappe.utils import flt, getdate, nowdate
 
+from pos_next.api.utilities import get_selling_price_list
+
 # Item group tree resolution is shared with the promotion engine, which matches
 # Pricing Rule item_groups rows against cart lines by lineage.
 from pos_next.promotions.scope import (
@@ -653,7 +655,7 @@ def search_by_barcode(barcode, pos_profile):
 		# Validate POS Profile has required fields
 		if not pos_profile_doc.warehouse:
 			frappe.throw(_("Warehouse not set in POS Profile {0}").format(pos_profile))
-		if not pos_profile_doc.selling_price_list:
+		if not get_selling_price_list(pos_profile_doc):
 			frappe.throw(_("Selling Price List not set in POS Profile {0}").format(pos_profile))
 		if not pos_profile_doc.company:
 			frappe.throw(_("Company not set in POS Profile {0}").format(pos_profile))
@@ -682,7 +684,7 @@ def search_by_barcode(barcode, pos_profile):
 		item_details = get_item_detail(
 			item=json.dumps(item),
 			warehouse=pos_profile_doc.warehouse,
-			price_list=pos_profile_doc.selling_price_list,
+			price_list=get_selling_price_list(pos_profile_doc),
 			company=pos_profile_doc.company,
 		)
 
@@ -694,7 +696,7 @@ def search_by_barcode(barcode, pos_profile):
 		# Build uom_prices map (same pattern as get_items)
 		uom_prices = _fetch_item_uom_prices(
 			item_code,
-			pos_profile_doc.selling_price_list,
+			get_selling_price_list(pos_profile_doc),
 		)
 
 		item_details["uom_prices"] = uom_prices
@@ -862,7 +864,7 @@ def get_item_variants(template_item, pos_profile):
 		# Get all UOM-specific prices for variants (valid on today's date)
 		uom_prices_map = _fetch_uom_prices_map(
 			variant_codes,
-			pos_profile_doc.selling_price_list,
+			get_selling_price_list(pos_profile_doc),
 		)
 
 		# Get all variant attributes in a single query (performance optimization)
@@ -1530,7 +1532,7 @@ def get_items(
 		# UOM-specific prices - only rows valid for today (latest valid_from per UOM)
 		uom_prices_map = _fetch_uom_prices_map(
 			item_codes,
-			pos_profile_doc.selling_price_list,
+			get_selling_price_list(pos_profile_doc),
 		)
 
 		# Batch query stock for all items across the session's warehouses
@@ -1615,7 +1617,7 @@ def get_items(
 					.on(Item.name == ItemPrice.item_code)
 					.select(fn.Min(ItemPrice.price_list_rate).as_("min_price"))
 					.where(Item.variant_of == item["item_code"])
-					.where(ItemPrice.price_list == pos_profile_doc.selling_price_list)
+					.where(ItemPrice.price_list == get_selling_price_list(pos_profile_doc))
 					.where(Item.disabled == 0)
 					.where(_item_price_validity_conditions(ItemPrice, today))
 					.run(as_dict=True)
@@ -1829,7 +1831,7 @@ def get_items_bulk(
 					conversion_map[row.parent][row.uom] = row.conversion_factor
 
 		# Prices (valid on today's date only)
-		price_list = pos_profile_doc.selling_price_list
+		price_list = get_selling_price_list(pos_profile_doc)
 		uom_prices_map = _fetch_uom_prices_map(
 			item_codes,
 			price_list,
@@ -1997,7 +1999,7 @@ def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):
 		details = get_item_detail(
 			item=json.dumps(item),
 			warehouse=pos_profile_doc.warehouse,
-			price_list=pos_profile_doc.selling_price_list,
+			price_list=get_selling_price_list(pos_profile_doc),
 			company=pos_profile_doc.company,
 		)
 		if item_doc.is_stock_item:

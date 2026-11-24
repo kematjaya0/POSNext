@@ -1419,6 +1419,14 @@
 								</div>
 							</div>
 
+							<ItemPriceListPicker
+								v-if="!item.is_free_item"
+								:item="item" :pos-profile="posProfile" :currency="currency"
+								:effective-rate="effectiveItemPrice(item)"
+								@reference-change="syncPriceReference(item, $event)"
+								@context-change="syncPriceContext(item, $event)"
+							/>
+
 							<!-- Warehouses the row ships from (saleSplit), one line each -->
 							<template v-for="parts in [rowAllocation(item)]" :key="'allocation'">
 								<div
@@ -1641,6 +1649,7 @@
 				</div>
 			</div>
 
+			<p v-if="approvalPreview.error" class="mb-2 rounded border border-red-300 bg-red-50 p-2 text-xs text-red-800" role="alert">{{ approvalPreview.error }}</p>
 			<!-- Sales Approval pre-check (nextend) -->
 			<div
 				v-if="approvalPreview.needs_approval"
@@ -1788,6 +1797,10 @@
 		<EditItemDialog
 			v-model="showEditDialog"
 			:item="selectedItem"
+			:pos-profile="posProfile"
+			:pricing-total="pricingBaseTotal"
+			:original-item-total="selectedItem ? submittedItemTotal(selectedItem) : 0"
+			:additional-discount="additionalDiscount"
 			:warehouses="warehouses"
 			:currency="currency"
 			@update-item="handleUpdateItem"
@@ -1819,6 +1832,8 @@ import { FeatherIcon } from "frappe-ui";
 import { createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import EditItemDialog from "./EditItemDialog.vue";
+import ItemPriceListPicker from "./ItemPriceListPicker.vue";
+import { pricingDiscountFactor } from "@/utils/itemPricing";
 
 /**
  * ============================================================================
@@ -1949,6 +1964,28 @@ const props = defineProps({
  * the invoice is submitted. If this call fails or the app is absent, checkout
  * behaves exactly as before.
  */
+// Use the same post-item-discount rates and total as the server preview.
+const pricingBaseTotal = computed(() => cartStore.formatItemsForSubmission(props.items || [])
+	.reduce((sum, row) => sum + Number(row.rate || 0) * Number(row.qty || 0), 0));
+function submittedItemTotal(item) {
+	return cartStore.formatItemsForSubmission([item])
+		.filter((row) => !row.custom_addon_parent_key)
+		.reduce((sum, row) => sum + Number(row.rate || 0) * Number(row.qty || 0), 0);
+}
+function effectiveItemPrice(item) {
+	const rows = cartStore.formatItemsForSubmission([item]).filter((row) => !row.custom_addon_parent_key && !row.is_free_item);
+	const qty = rows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+	const total = rows.reduce((sum, row) => sum + Number(row.rate || 0) * Number(row.qty || 0), 0);
+	return (qty > 0 ? total / qty : 0) * pricingDiscountFactor(pricingBaseTotal.value, props.additionalDiscount);
+}
+function syncPriceReference(item, option) {
+	if (!cartStore.posOrder && item.custom_selling_price_list !== option.price_list)
+		cartStore.updateItemDetails(item.item_code, {custom_selling_price_list: option.price_list}, item.uom);
+}
+function syncPriceContext(item, context) {
+	cartStore.updateItemDetails(item.item_code, {pricing_context: context, pricing_territory: context.territory}, item.uom);
+}
+
 const approvalPreview = useSalesApprovalPreview(props, (items) =>
 	cartStore.formatItemsForSubmission(items)
 );

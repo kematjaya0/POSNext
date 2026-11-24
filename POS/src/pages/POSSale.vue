@@ -545,7 +545,6 @@
 										)
 								"
 								@update-uom="cartStore.changeItemUOM"
-								@edit-item="handleEditItem"
 								@edit-tinting="openTintingDialog"
 								@edit-addons="openAddonDialog"
 								@view-shift="uiStore.showOpenShiftDialog = true"
@@ -2567,10 +2566,6 @@ function handleItemSelected(item, autoAdd = false) {
 			__("Item: {0}", [item.item_code])
 		);
 	}
-}
-
-async function handleEditItem(updatedItem) {
-	await cartStore.updateItemDetails(updatedItem.item_code, updatedItem);
 }
 
 function handleAdditionalDiscountUpdate(discountAmount) {

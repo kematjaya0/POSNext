@@ -237,6 +237,8 @@
 		:target-doctype="'Sales Invoice'"
 		allow-doctype-switch
 		locked-doctype="Sales Invoice"
+		:prepaid-amount="totalUangMuka"
+		:order-total="totalUangMuka + totalSisa"
 		:allow-partial-payment="false"
 		:allow-credit-sale="false"
 		:allow-delivery="false"

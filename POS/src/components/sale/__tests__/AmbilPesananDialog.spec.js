@@ -30,9 +30,17 @@ vi.mock("@/components/sale/PindahPesananDialog.vue", () => ({
 }));
 vi.mock("@/components/sale/PaymentDialog.vue", () => ({
 	default: {
-		props: ["modelValue", "grandTotal", "posProfile", "allowDoctypeSwitch", "lockedDoctype"],
+		props: [
+			"modelValue",
+			"grandTotal",
+			"posProfile",
+			"allowDoctypeSwitch",
+			"lockedDoctype",
+			"prepaidAmount",
+			"orderTotal",
+		],
 		emits: ["payment-completed", "update:modelValue"],
-		template: `<div v-if="modelValue" class="stub-payment" :data-locked="lockedDoctype">
+		template: `<div v-if="modelValue" class="stub-payment" :data-locked="lockedDoctype" :data-prepaid="prepaidAmount" :data-order-total="orderTotal" :data-grand-total="grandTotal">
 			<button @click="$emit('payment-completed', { payments: [{ mode_of_payment: 'Tunai', amount: 1500000 }] })">
 				Selesaikan pembayaran
 			</button>
@@ -228,7 +236,12 @@ describe("AmbilPesananDialog", () => {
 			.find((b) => b.text() === "Bayar")
 			.trigger("click");
 		await flushPromises();
-		expect(wrapper.find(".stub-payment").attributes("data-locked")).toBe("Sales Invoice");
+		const payment = wrapper.find(".stub-payment");
+		expect(payment.attributes("data-locked")).toBe("Sales Invoice");
+		// Total SO 2.000.000 = uang muka 1.000.000 + kekurangan 1.000.000
+		expect(payment.attributes("data-prepaid")).toBe("1000000");
+		expect(payment.attributes("data-grand-total")).toBe("1000000");
+		expect(payment.attributes("data-order-total")).toBe("2000000");
 	});
 
 	it("menampilkan pesanan grup, uang muka, dan sisa yang belum ditagih", async () => {

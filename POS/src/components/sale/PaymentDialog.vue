@@ -1032,6 +1032,25 @@
 									>-{{ formatCurrency(discountAmount) }}</span
 								>
 							</div>
+							<!-- Invoice from a Sales Order: what the order was, what its
+							     down payment already covered, and what is still owed -->
+							<div
+								v-if="prepaidAmount > 0"
+								class="mt-1 flex flex-col gap-0.5 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs"
+							>
+								<div class="flex justify-between">
+									<span class="text-gray-600">{{ __("Total Sales Order") }}</span>
+									<span class="font-medium text-gray-900">{{
+										formatCurrency(orderTotal || prepaidAmount + grandTotal)
+									}}</span>
+								</div>
+								<div class="flex justify-between">
+									<span class="text-gray-600">{{ __("Sudah dibayar (uang muka)") }}</span>
+									<span class="font-medium text-green-700"
+										>-{{ formatCurrency(prepaidAmount) }}</span
+									>
+								</div>
+							</div>
 							<!-- Grand Total -->
 							<div
 								class="flex items-center justify-between pt-2 mt-1 border-t border-gray-300"
@@ -1041,7 +1060,7 @@
 										'font-bold text-gray-900 text-start',
 										isCompactMode ? 'text-sm' : 'text-base',
 									]"
-									>{{ __("Grand Total") }}</span
+									>{{ prepaidAmount > 0 ? __("Kekurangan") : __("Grand Total") }}</span
 								>
 								<span
 									:class="[
@@ -2356,6 +2375,16 @@ const props = defineProps({
 		type: Boolean,
 		default: false,
 	},
+	/** Down payment already received on the Sales Orders this invoice bills. */
+	prepaidAmount: {
+		type: Number,
+		default: 0,
+	},
+	/** Total of those Sales Orders; grandTotal is then only what is still owed. */
+	orderTotal: {
+		type: Number,
+		default: 0,
+	},
 	/** Show the switch but keep it on this doctype (a nota made from a Sales Order). */
 	lockedDoctype: {
 		type: String,
@@ -3442,6 +3471,11 @@ const canComplete = computed(() => {
 		return true;
 	}
 
+	// Sales Order already paid in full by its down payment: nothing left to take
+	if (props.prepaidAmount > 0 && roundCurrency(props.grandTotal) <= 0) {
+		return totalPaid.value === 0;
+	}
+
 	// "Pay on Receivable Account": the chosen account holds the unpaid balance
 	if (selectedReceivableAccount.value && props.allowCreditSale) {
 		return totalPaid.value <= roundCurrency(props.grandTotal) + 0.01;
@@ -3464,6 +3498,9 @@ const canComplete = computed(() => {
 const paymentButtonText = computed(() => {
 	if (isCodUnpaid.value) {
 		return __("Selesai, bayar di tempat");
+	}
+	if (props.prepaidAmount > 0 && roundCurrency(props.grandTotal) <= 0) {
+		return __("Buat Invoice");
 	}
 	// Show "Complete Payment" if fully paid or write-off covers remaining
 	if (remainingAmount.value === 0 || (applyWriteOff.value && canWriteOff.value)) {

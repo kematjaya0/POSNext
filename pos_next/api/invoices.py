@@ -1,8 +1,6 @@
 # Copyright (c) 2025, BrainWise and contributors
 # For license information, please see license.txt
 
-from __future__ import unicode_literals
-
 import json
 import math
 from functools import lru_cache
@@ -128,7 +126,6 @@ except Exception as _pricing_import_error:  # pragma: no cover - ERPNext not ins
 	expanded_groups = None
 
 
-
 def _item_matches_pricing_rule(item, rule) -> bool:
 	if not item_matches_pricing_rule_apply_on:
 		return False
@@ -192,9 +189,9 @@ def _stamp_bundled_same_item_free_discount(item_doc, line_free_qty, price_list_r
 
 def _make_free_item_doc(item_code, qty, rule_name, full_rule, promotional_scheme=None):
 	"""Build a free-item payload for ``free_items_map``."""
-	item_data = frappe.get_cached_value(
-		"Item", item_code, ["item_name", "description", "stock_uom"], as_dict=1
-	) or {}
+	item_data = (
+		frappe.get_cached_value("Item", item_code, ["item_name", "description", "stock_uom"], as_dict=1) or {}
+	)
 	uom = full_rule.free_item_uom or item_data.get("stock_uom") or "Nos"
 	return frappe._dict(
 		{
@@ -213,7 +210,9 @@ def _make_free_item_doc(item_code, qty, rule_name, full_rule, promotional_scheme
 	)
 
 
-def _recompute_recursive_product_free_items(prepared_items, free_items_map, rule_map, applied_rules=None) -> None:
+def _recompute_recursive_product_free_items(
+	prepared_items, free_items_map, rule_map, applied_rules=None
+) -> None:
 	"""Recompute recursive product discounts with POS Next rules.
 
 	1. Same-item frees are always evaluated per cart line: each SKU that meets
@@ -262,8 +261,7 @@ def _recompute_recursive_product_free_items(prepared_items, free_items_map, rule
 		# Never dump free units onto cheapest/most-expensive via Min/Max Price basis.
 		# Other free item + Item Group/Brand: still aggregate purchased qty.
 		aggregate = (
-			should_aggregate_product_quantities(full_rule.apply_on, scheme_item_count)
-			and not same_item
+			should_aggregate_product_quantities(full_rule.apply_on, scheme_item_count) and not same_item
 		)
 		slab_free = flt(full_rule.free_qty) or 1
 		recurse_for = flt(full_rule.recurse_for)
@@ -271,9 +269,7 @@ def _recompute_recursive_product_free_items(prepared_items, free_items_map, rule
 		promotional_scheme = rule_map[rule_name].get("promotional_scheme")
 
 		matching_lines = [
-			item_doc
-			for item_doc in prepared_items
-			if _item_matches_gwp_rule(item_doc, full_rule)
+			item_doc for item_doc in prepared_items if _item_matches_gwp_rule(item_doc, full_rule)
 		]
 		if not matching_lines:
 			continue
@@ -283,7 +279,12 @@ def _recompute_recursive_product_free_items(prepared_items, free_items_map, rule
 				remove_pricing_rule(item_doc, rule_name)
 				# Avoid "Applied" / pricing_rule badge with zero free units.
 				if not (item_doc.get("pricing_rules") or "").strip():
-					if item_doc.get("discount_source") in (None, "", "pricing_rule", DISCOUNT_SOURCE_FREE_ITEM):
+					if item_doc.get("discount_source") in (
+						None,
+						"",
+						"pricing_rule",
+						DISCOUNT_SOURCE_FREE_ITEM,
+					):
 						item_doc.discount_source = None
 						item_doc.free_qty = 0
 			if applied_rules is not None:
@@ -292,8 +293,7 @@ def _recompute_recursive_product_free_items(prepared_items, free_items_map, rule
 		if aggregate:
 			# Other free item + Item Group/Brand: aggregate purchased qty.
 			line_qtys = [
-				flt(item_doc.get("qty") or item_doc.get("quantity") or 0)
-				for item_doc in matching_lines
+				flt(item_doc.get("qty") or item_doc.get("quantity") or 0) for item_doc in matching_lines
 			]
 			total_qty = sum(line_qtys)
 			free_total = compute_product_recursive_free_qty(
@@ -368,6 +368,7 @@ def _recompute_recursive_product_free_items(prepared_items, free_items_map, rule
 		if not line_gave_free and applied_rules is not None:
 			applied_rules.discard(rule_name)
 
+
 def _apply_bundled_same_item_free_discounts(prepared_items, free_items_map, rule_map) -> None:
 	"""Bundle non-GWP same-item free gifts onto the paid line instead of a separate row."""
 	if not calculate_gwp_discount_amount:
@@ -399,9 +400,7 @@ def _apply_bundled_same_item_free_discounts(prepared_items, free_items_map, rule
 			):
 				continue
 
-			price_list_rate = flt(
-				item_doc.get("price_list_rate") or item_doc.get("rate") or 0
-			)
+			price_list_rate = flt(item_doc.get("price_list_rate") or item_doc.get("rate") or 0)
 			_stamp_bundled_same_item_free_discount(item_doc, free_qty, price_list_rate)
 			append_pricing_rule(item_doc, rule_name)
 			break
@@ -437,9 +436,7 @@ def _apply_gwp_line_discounts(prepared_items, free_items_map, rule_map) -> None:
 
 		if aggregate:
 			matching_lines = [
-				item_doc
-				for item_doc in prepared_items
-				if _item_matches_gwp_rule(item_doc, full_rule)
+				item_doc for item_doc in prepared_items if _item_matches_gwp_rule(item_doc, full_rule)
 			]
 			if not matching_lines:
 				continue
@@ -452,9 +449,7 @@ def _apply_gwp_line_discounts(prepared_items, free_items_map, rule_map) -> None:
 				for item_doc in matching_lines
 			]
 			total_qty = sum(line_qtys)
-			total_free = get_gwp_slab_free_qty(
-				slab_free_qty, total_qty, full_rule.min_qty, full_rule.max_qty
-			)
+			total_free = get_gwp_slab_free_qty(slab_free_qty, total_qty, full_rule.min_qty, full_rule.max_qty)
 			if total_free <= 0:
 				continue
 
@@ -465,9 +460,7 @@ def _apply_gwp_line_discounts(prepared_items, free_items_map, rule_map) -> None:
 				append_pricing_rule(item_doc, rule_name)
 				if line_free <= 0:
 					continue
-				price_list_rate = flt(
-					item_doc.get("price_list_rate") or item_doc.get("rate") or 0
-				)
+				price_list_rate = flt(item_doc.get("price_list_rate") or item_doc.get("rate") or 0)
 				_stamp_gwp_line_discount(item_doc, line_free, price_list_rate)
 			continue
 
@@ -483,15 +476,11 @@ def _apply_gwp_line_discounts(prepared_items, free_items_map, rule_map) -> None:
 				continue
 
 			line_qty = flt(item_doc.get("qty") or item_doc.get("quantity") or 0)
-			line_free = get_gwp_slab_free_qty(
-				slab_free_qty, line_qty, full_rule.min_qty, full_rule.max_qty
-			)
+			line_free = get_gwp_slab_free_qty(slab_free_qty, line_qty, full_rule.min_qty, full_rule.max_qty)
 			if line_free <= 0:
 				continue
 
-			price_list_rate = flt(
-				item_doc.get("price_list_rate") or item_doc.get("rate") or 0
-			)
+			price_list_rate = flt(item_doc.get("price_list_rate") or item_doc.get("rate") or 0)
 			_stamp_gwp_line_discount(item_doc, line_free, price_list_rate)
 			append_pricing_rule(item_doc, rule_name)
 
@@ -519,8 +508,10 @@ def _apply_gift_pool_free_items(prepared_items, free_items_map, rule_map, applie
 			if key[1] == rule_name:
 				free_items_map.pop(key, None)
 
-		scheme_name = details.get("promotional_scheme") if hasattr(details, "get") else getattr(
-			details, "promotional_scheme", None
+		scheme_name = (
+			details.get("promotional_scheme")
+			if hasattr(details, "get")
+			else getattr(details, "promotional_scheme", None)
 		)
 		pools = get_scheme_gift_pools(scheme_name)
 		qtys = get_scheme_gift_pool_qtys(scheme_name) if get_scheme_gift_pool_qtys else {}
@@ -546,16 +537,12 @@ def _apply_gift_pool_free_items(prepared_items, free_items_map, rule_map, applie
 				if cstr(item_doc.get("item_code")) in pool_set:
 					continue
 				matching_lines.append(item_doc)
-				paid_qty += _floor_free_item_qty(
-					item_doc.get("qty") or item_doc.get("quantity") or 0
-				)
+				paid_qty += _floor_free_item_qty(item_doc.get("qty") or item_doc.get("quantity") or 0)
 
 			if paid_qty <= 0 or not matching_lines:
 				continue
 
-			granted = allocate_gift_pool_free_items(
-				paid_qty, pool_codes, qtys.get(item_group, 1)
-			)
+			granted = allocate_gift_pool_free_items(paid_qty, pool_codes, qtys.get(item_group, 1))
 			if not granted:
 				continue
 
@@ -999,9 +986,7 @@ def _ensure_invoice_customer(invoice_doc, pos_profile=None):
 		return
 
 	frappe.throw(
-		_(
-			"Customer is required. Please select a customer or configure a default customer in POS Profile."
-		),
+		_("Customer is required. Please select a customer or configure a default customer in POS Profile."),
 		title=_("Customer Required"),
 	)
 
@@ -1120,9 +1105,7 @@ def _paid_stock_demand_by_item_warehouse(paid_items, default_warehouse):
 		warehouse = item.get("warehouse") or default_warehouse
 		qty = flt(item.get("stock_qty") or 0)
 		if not qty:
-			qty = flt(item.get("qty") or item.get("quantity") or 0) * flt(
-				item.get("conversion_factor") or 1
-			)
+			qty = flt(item.get("qty") or item.get("quantity") or 0) * flt(item.get("conversion_factor") or 1)
 		if qty <= 0:
 			continue
 		key = (item_code, warehouse)
@@ -1213,7 +1196,8 @@ def _filter_out_of_stock_free_items(
 				is_product = (rule_map[rule_name].get("price_or_product_discount") or "") == "Product"
 			else:
 				is_product = (
-					frappe.get_cached_value("Pricing Rule", rule_name, "price_or_product_discount") == "Product"
+					frappe.get_cached_value("Pricing Rule", rule_name, "price_or_product_discount")
+					== "Product"
 				)
 			if not is_product:
 				continue
@@ -1339,7 +1323,9 @@ def _validate_stock_on_invoice(invoice_doc):
 	Out-of-stock free gifts are stripped instead of blocking checkout so paid
 	items can still be submitted.
 	"""
-	if invoice_doc.doctype == "Sales Invoice" and not cint(getattr(invoice_doc, "update_stock", 0)):
+	# Sales Order boleh memesan qty di atas stok satu gudang: kekurangan masuk
+	# company utama barang di cabang yang sama (POS Terpadu).
+	if invoice_doc.doctype != "Sales Invoice" or not cint(getattr(invoice_doc, "update_stock", 0)):
 		return
 
 	errors = _collect_stock_errors(_stock_items_to_check(invoice_doc))
@@ -1695,15 +1681,9 @@ def update_invoice(data):
 
 				frontend_discount_amount = flt(item.get("discount_amount") or 0)
 				qty = flt(item.get("qty") or 1)
-				if (
-					frontend_discount_amount > 0
-					and flt(item.price_list_rate) > 0
-					and qty > 0
-				):
+				if frontend_discount_amount > 0 and flt(item.price_list_rate) > 0 and qty > 0:
 					base_amount = flt(item.price_list_rate) * qty
-					item.discount_percentage = min(
-						100, (frontend_discount_amount / base_amount) * 100
-					)
+					item.discount_percentage = min(100, (frontend_discount_amount / base_amount) * 100)
 					item.discount_amount = frontend_discount_amount
 					item.rate = flt(item.price_list_rate) * (1 - item.discount_percentage / 100)
 					item_rate = flt(item.rate or 0)
@@ -1745,7 +1725,6 @@ def update_invoice(data):
 						r.strip() for r in str(item.pricing_rules).split(",") if r.strip()
 					)
 				item.pricing_rules = ""
-
 
 		if applied_rule_names_seen:
 			inactive = get_inactive_rules(
@@ -1837,8 +1816,11 @@ def update_invoice(data):
 		if invoice_doc.base_grand_total is None:
 			invoice_doc.base_grand_total = 0.0
 
-		# Set accounts for payment methods before saving
-		_set_payment_accounts(invoice_doc.payments, invoice_doc.company)
+		# Set accounts for payment methods before saving. Sales Order dari POS
+		# Terpadu tidak punya child table payments: uang kasir disimpan di
+		# nextend_pembayaran_kasir dan dibuat PE saat SO di-submit.
+		if doctype == "Sales Invoice" and hasattr(invoice_doc, "payments"):
+			_set_payment_accounts(invoice_doc.payments, invoice_doc.company)
 
 		# For return invoices, ensure payments are negative
 		if invoice_doc.get("is_return"):
@@ -1879,7 +1861,11 @@ def update_invoice(data):
 		# Validate stock availability before saving draft
 		# is_stock_item may not be set on unsaved doc items (frontend doesn't send it),
 		# so look it up from Item master
-		if not invoice_doc.get("is_return") and _should_block(pos_profile):
+		if (
+			invoice_doc.doctype == "Sales Invoice"
+			and not invoice_doc.get("is_return")
+			and _should_block(pos_profile)
+		):
 			item_codes = list({d.item_code for d in invoice_doc.items if d.get("item_code")})
 			if item_codes:
 				stock_item_set = set(
@@ -2367,12 +2353,25 @@ def submit_invoice(invoice=None, data=None):
 		# Settings for this profile actually permit credit sales, so a tampered
 		# client can't bypass the core payment-row requirement.
 		is_credit_sale = cint(data.get("is_credit_sale") or invoice.get("is_credit_sale"))
-		if is_credit_sale and not invoice_doc.payments and flt(invoice_doc.grand_total) > 0:
-			allow_credit_sale = cint(
-				frappe.db.get_value(DOCTYPE_POS_SETTINGS, {"pos_profile": pos_profile}, "allow_credit_sale")
-			)
-			if not allow_credit_sale:
-				frappe.throw(_("Credit sales are not enabled for this POS Profile."))
+		# A split down payment can leave one of its notes without a payment row.
+		# submit_split_sale sets this; re-check the hook so a client cannot use
+		# the flag to slip an unpaid sale past guard_credit_sale.
+		split_credit_sale = cint(data.get("split_credit_sale")) and any(
+			frappe.get_attr(hook)(invoice_doc) for hook in frappe.get_hooks("pos_next_split_allow_credit")
+		)
+		if (
+			(is_credit_sale or split_credit_sale)
+			and not invoice_doc.payments
+			and flt(invoice_doc.grand_total) > 0
+		):
+			if is_credit_sale:
+				allow_credit_sale = cint(
+					frappe.db.get_value(
+						DOCTYPE_POS_SETTINGS, {"pos_profile": pos_profile}, "allow_credit_sale"
+					)
+				)
+				if not allow_credit_sale:
+					frappe.throw(_("Credit sales are not enabled for this POS Profile."))
 			if not invoice_doc.get("customer"):
 				frappe.throw(_("Customer is required for credit sales"), title=_("Customer Required"))
 			invoice_doc.flags.pos_next_credit_sale = 1
@@ -2387,9 +2386,7 @@ def submit_invoice(invoice=None, data=None):
 
 		from pos_next.authorization.gate import TOKEN_FLAG
 
-		invoice_doc.flags[TOKEN_FLAG] = invoice.get("authorization_token") or data.get(
-			"authorization_token"
-		)
+		invoice_doc.flags[TOKEN_FLAG] = invoice.get("authorization_token") or data.get("authorization_token")
 
 		# Submit invoice
 		invoice_doc.submit()
@@ -2401,11 +2398,7 @@ def submit_invoice(invoice=None, data=None):
 
 		# Handle wallet transaction reversal for returns
 		wallet_reversal_ok = False
-		if (
-			not magento_loyalty_mode
-			and invoice_doc.get("is_return")
-			and invoice_doc.get("return_against")
-		):
+		if not magento_loyalty_mode and invoice_doc.get("is_return") and invoice_doc.get("return_against"):
 			from pos_next.pos_next.doctype.wallet_transaction.wallet_transaction import (
 				reverse_wallet_transactions_for_return,
 			)
@@ -2576,7 +2569,17 @@ def get_invoice(invoice_name):
 
 
 @frappe.whitelist()
-def get_invoices(pos_profile: str, search=None, limit: int = 20, offset=0, from_date=None, to_date=None, include_items=False, docstatus=None, start: int = 0) -> list:
+def get_invoices(
+	pos_profile: str,
+	search=None,
+	limit: int = 20,
+	offset=0,
+	from_date=None,
+	to_date=None,
+	include_items=False,
+	docstatus=None,
+	start: int = 0,
+) -> list:
 	"""
 	Get paginated, server-side filtered list of invoices for a POS Profile.
 
@@ -2616,7 +2619,7 @@ def get_invoices(pos_profile: str, search=None, limit: int = 20, offset=0, from_
 	params = {"pos_profile": pos_profile, "limit": limit, "offset": offset}
 
 	if docstatus is not None:
-		if isinstance(docstatus, (list, tuple)):
+		if isinstance(docstatus, list | tuple):
 			docstatus_list = [cint(d) for d in docstatus]
 			conditions.append(f"docstatus IN ({','.join(map(str, docstatus_list))})")
 		else:
@@ -4431,9 +4434,7 @@ def apply_offers(invoice_data, selected_offers=None):
 
 		# Recursive product free must run after per-item + txn free rows are
 		# collected, then bundle same-item gifts / apply GWP line discounts.
-		_recompute_recursive_product_free_items(
-			prepared_items, free_items_map, rule_map, applied_rules
-		)
+		_recompute_recursive_product_free_items(prepared_items, free_items_map, rule_map, applied_rules)
 		_apply_bundled_same_item_free_discounts(prepared_items, free_items_map, rule_map)
 		_apply_gwp_line_discounts(prepared_items, free_items_map, rule_map)
 		_apply_gift_pool_free_items(prepared_items, free_items_map, rule_map, applied_rules)

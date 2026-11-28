@@ -5,6 +5,7 @@
 
 import unittest
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import patch
 
 from pos_next.api import split_invoice
@@ -64,6 +65,156 @@ class TestAllocatePayments(unittest.TestCase):
 			_allocate_payments(payments, [100]),
 			[[{"mode_of_payment": "Cash", "amount": 100, "type": "Cash"}]],
 		)
+
+	def test_order_pays_pt_first_when_payment_is_short(self):
+		payments = [{"mode_of_payment": "Cash", "amount": 500000, "type": "Cash"}]
+		rows = _allocate_payments(payments, [400000, 600000], order=[1, 0])
+		self.assertEqual(rows[1], [{"mode_of_payment": "Cash", "amount": 500000, "type": "Cash"}])
+		self.assertEqual(rows[0], [])
+
+	def test_order_keeps_change_on_the_primary_invoice(self):
+		payments = [{"mode_of_payment": "Cash", "amount": 1200000, "type": "Cash"}]
+		rows = _allocate_payments(payments, [400000, 600000], order=[1, 0])
+		self.assertEqual(rows[1], [{"mode_of_payment": "Cash", "amount": 600000, "type": "Cash"}])
+		self.assertEqual(rows[0], [{"mode_of_payment": "Cash", "amount": 600000, "type": "Cash"}])
+
+	def test_order_shares_each_mode_proportionally(self):
+		payments = [
+			{"mode_of_payment": "Cash", "amount": 400000, "type": "Cash"},
+			{"mode_of_payment": "Transfer", "amount": 300000, "type": "Bank"},
+		]
+		rows = _allocate_payments(payments, [400000, 600000], order=[1, 0])
+		self.assertEqual(
+			[(r["mode_of_payment"], r["amount"]) for r in rows[1]],
+			[("Cash", 342857.14), ("Transfer", 257142.86)],
+		)
+		self.assertEqual(
+			[(r["mode_of_payment"], r["amount"]) for r in rows[0]],
+			[("Cash", 57142.86), ("Transfer", 42857.14)],
+		)
+
+	def test_order_with_primary_first_matches_the_legacy_result(self):
+		payments = [{"mode_of_payment": "Cash", "amount": 250, "type": "Cash"}]
+		rows = _allocate_payments(payments, [150, 80], order=[0, 1])
+		self.assertEqual(rows[1], [{"mode_of_payment": "Cash", "amount": 80, "type": "Cash"}])
+		self.assertEqual(rows[0], [{"mode_of_payment": "Cash", "amount": 170, "type": "Cash"}])
+
+
+class TestPaymentOrderHook(unittest.TestCase):
+	def test_last_hook_receives_company_flags(self):
+		groups = [{"company": "CV Utama"}, {"company": "PT Cabang"}]
+		payload = [{"company": "CV Utama", "is_pkp": 0}, {"company": "PT Cabang", "is_pkp": 1}]
+		seen = []
+
+		def first(companies):
+			seen.append(("first", companies))
+			return [0, 1]
+
+		def last(companies):
+			seen.append(("last", companies))
+			return [1, 0]
+
+		with (
+			patch.object(
+				split_invoice.frappe,
+				"get_all",
+				return_value=[
+					{"name": "CV Utama", "is_pkp": 0},
+					{"name": "PT Cabang", "is_pkp": 1},
+				],
+			),
+			patch.object(split_invoice.frappe, "get_hooks", return_value=["a", "b"]),
+			patch.object(
+				split_invoice.frappe,
+				"get_attr",
+				side_effect=lambda hook: {"a": first, "b": last}[hook],
+			),
+		):
+			self.assertEqual(split_invoice._payment_order(groups), [1, 0])
+		self.assertEqual(seen, [("first", payload), ("last", payload)])
+
+	def test_without_hooks_returns_none(self):
+		with (
+			patch.object(split_invoice.frappe, "get_all", return_value=[]),
+			patch.object(split_invoice.frappe, "get_hooks", return_value=[]),
+		):
+			self.assertIsNone(split_invoice._payment_order([{"company": "CV Utama"}]))
+
+
+class TestValidateSplitSale(unittest.TestCase):
+	plan: ClassVar[dict] = {"groups": [{"company": "CV"}, {"company": "PT"}]}
+
+	def test_credit_is_rejected_without_a_hook(self):
+		with (
+			patch.object(split_invoice.frappe, "get_hooks", return_value=[]),
+			self.assertRaises(split_invoice.frappe.ValidationError),
+		):
+			split_invoice._validate_split_sale(
+				{"customer": "REGULER", "payments": []}, {"is_credit_sale": 1}, self.plan
+			)
+
+	def test_partial_payment_is_rejected_without_a_hook(self):
+		invoice = self.invoice(payments=[{"amount": 200_000}])
+		with (
+			patch.object(split_invoice.frappe, "get_hooks", return_value=[]),
+			self.assertRaisesRegex(split_invoice.frappe.ValidationError, "lunas|paid in full"),
+		):
+			split_invoice._validate_split_sale(invoice, {}, self.plan)
+
+	def test_full_payment_counts_change_and_write_off(self):
+		invoice = self.invoice(payments=[{"amount": 1_200_000}])
+		with patch.object(split_invoice.frappe, "get_hooks", return_value=[]):
+			self.assertFalse(
+				split_invoice._validate_split_sale(
+					invoice, {"change_amount": 190_000, "write_off_amount": 10_000}, self.plan
+				)
+			)
+
+	def test_hook_can_allow_a_down_payment(self):
+		invoice = self.invoice(customer="CICIL", payments=[{"amount": 200_000}])
+		with (
+			patch.object(split_invoice.frappe, "get_hooks", return_value=["allow"]),
+			patch.object(split_invoice.frappe, "get_attr", return_value=lambda _: True),
+		):
+			self.assertTrue(split_invoice._validate_split_sale(invoice, {}, self.plan))
+
+	def invoice(self, **overrides):
+		return {
+			"customer": "REGULER",
+			"grand_total": 1_000_000,
+			"payments": [],
+			**overrides,
+		}
+
+	def test_any_hook_can_allow_credit_for_an_installment_customer(self):
+		def allow(invoice):
+			return invoice.get("customer") == "CICIL"
+
+		def attr(hook):
+			return allow if hook == "b" else lambda invoice: False
+
+		with (
+			patch.object(split_invoice.frappe, "get_hooks", return_value=["a", "b"]),
+			patch.object(split_invoice.frappe, "get_attr", side_effect=attr),
+		):
+			# Both a credit sale and a zero down payment may go through.
+			split_invoice._validate_split_sale(
+				{"customer": "CICIL", "payments": []}, {"is_credit_sale": 1}, self.plan
+			)
+			split_invoice._validate_split_sale(
+				{"customer": "CICIL", "receivable_account": "Piutang", "payments": []}, {}, self.plan
+			)
+
+	def test_hook_does_not_allow_customer_credit_or_loyalty_points(self):
+		with (
+			patch.object(split_invoice.frappe, "get_hooks", return_value=["a"]),
+			patch.object(split_invoice.frappe, "get_attr", return_value=lambda invoice: True),
+		):
+			for data in ({"redeemed_customer_credit": 1}, {"redeem_loyalty_points": 1}):
+				with self.subTest(data=data), self.assertRaises(split_invoice.frappe.ValidationError):
+					split_invoice._validate_split_sale(
+						{"customer": "CICIL", "payments": [{"amount": 100}]}, data, self.plan
+					)
 
 
 class TestSplitRow(unittest.TestCase):

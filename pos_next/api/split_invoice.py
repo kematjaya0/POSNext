@@ -19,6 +19,9 @@ ships from and bills each company on its own invoice:
 * ``submit_split_sale`` - create every invoice in the request's transaction,
   share the basket discount and the payment between them, and submit them all
   (or keep them all as drafts when a ``pos_next_split_hold`` hook says so).
+  The order invoices are paid in comes from the last
+  ``pos_next_split_payment_order`` hook; without one, the primary invoice is
+  paid last as before.
 
 The cart side stays one row per item + UOM; only the submitted payload is
 split here, so promotions keep working on the whole basket.
@@ -320,7 +323,7 @@ def submit_split_sale(invoice, data, plan):
 	"""
 	from pos_next.api.invoices import _set_payment_accounts, submit_invoice, update_invoice
 
-	_validate_split_sale(invoice, data, plan)
+	allow_credit = _validate_split_sale(invoice, data, plan)
 
 	groups = plan["groups"]
 	split_ref = frappe.generate_hash(length=10)
@@ -344,7 +347,7 @@ def submit_split_sale(invoice, data, plan):
 		drafts.append(update_invoice(json.dumps(payload, default=str)))
 
 	totals = [flt(draft.get("rounded_total")) or flt(draft.get("grand_total")) for draft in drafts]
-	payments = _allocate_payments(invoice.get("payments") or [], totals)
+	payments = _allocate_payments(invoice.get("payments") or [], totals, order=_payment_order(groups))
 
 	for draft, draft_payments in zip(drafts, payments, strict=True):
 		# Not through update_invoice again: it would re-derive row discounts from
@@ -376,6 +379,10 @@ def submit_split_sale(invoice, data, plan):
 			child_data["write_off_amount"] = data.get("write_off_amount") or invoice.get("write_off_amount")
 			if invoice.get("coupon_code"):
 				child["coupon_code"] = invoice["coupon_code"]
+		if allow_credit:
+			# One note of a down-payment sale may end up with no payment row.
+			# submit_invoice re-checks the hook before allowing that.
+			child_data["split_credit_sale"] = 1
 		result = submit_invoice(invoice=child, data=child_data)
 		result["company"] = groups[index]["company"]
 		results.append(result)
@@ -383,24 +390,42 @@ def submit_split_sale(invoice, data, plan):
 	return dict(results[0], split_ref=split_ref, invoices=results)
 
 
+def _basket_total(invoice, plan):
+	"""Gross basket total, falling back to the planned rows for a raw payload."""
+	total = flt(invoice.get("rounded_total") or invoice.get("grand_total"))
+	if total:
+		return total
+	rows = [row for group in plan["groups"] for row in group["items"]]
+	return flt(_items_net(rows) - flt(invoice.get("discount_amount")))
+
+
 def _validate_split_sale(invoice, data, plan):
 	"""Reject what a split sale does not support yet.
 
-	Open points (credit, loyalty, combined returns) are tracked in nextend's
-	planning notes - see pos-multi-company-open-questions.md.
+	An installed app may allow credit/short payment through
+	``pos_next_split_allow_credit`` (nextend does it for Boleh Cicilan
+	customers); customer credit and loyalty points are never allowed. Returns
+	whether the sale was allowed on credit, so the child invoices can be
+	submitted without a payment row.
 	"""
 	companies = ", ".join(group["company"] for group in plan["groups"])
+	allow_credit = any(
+		frappe.get_attr(hook)(invoice) for hook in frappe.get_hooks("pos_next_split_allow_credit")
+	)
 
 	def get(key):
 		return data.get(key) or invoice.get(key)
 
-	if cint(get("is_return")):
-		frappe.throw(_("Returns of a split sale are made per invoice."))
-	if cint(get("is_credit_sale")) or get("receivable_account"):
+	def must_be_paid_in_full():
 		frappe.throw(
 			_("This sale is billed to several companies ({0}) and must be paid in full.").format(companies),
 			title=_("Split Sale"),
 		)
+
+	if cint(get("is_return")):
+		frappe.throw(_("Returns of a split sale are made per invoice."))
+	if not allow_credit and (cint(get("is_credit_sale")) or get("receivable_account")):
+		must_be_paid_in_full()
 	if flt(get("redeemed_customer_credit")) or get("customer_credit_dict"):
 		frappe.throw(
 			_("Customer credit cannot pay a sale billed to several companies ({0}).").format(companies),
@@ -415,14 +440,15 @@ def _validate_split_sale(invoice, data, plan):
 	# nextend: a delivered sale marked Bayar di Tempat is collected at the door,
 	# so it may leave with a down payment or nothing paid at all.
 	if cint(invoice.get("nextend_dikirim")) and cint(invoice.get("nextend_bayar_di_tempat")):
-		return
+		return allow_credit
 
-	paid = sum(flt(payment.get("amount")) for payment in invoice.get("payments") or [])
-	if paid <= 0:
-		frappe.throw(
-			_("This sale is billed to several companies ({0}) and must be paid in full.").format(companies),
-			title=_("Split Sale"),
-		)
+	if not allow_credit:
+		paid = sum(flt(payment.get("amount")) for payment in invoice.get("payments") or [])
+		paid -= flt(get("change_amount")) + flt(get("write_off_amount"))
+		total = _basket_total(invoice, plan)
+		if total > 0 and flt(paid - total) < 0:
+			must_be_paid_in_full()
+	return allow_credit
 
 
 def _items_net(items):
@@ -439,20 +465,47 @@ def _prorate(amount, weights, precision=2):
 	return shares
 
 
-def _allocate_payments(payments, totals, precision=2):
+def _payment_order(groups):
+	"""Invoice indexes to pay first, from the last installed hook.
+
+	Hooks receive ``[{"company", "is_pkp"}, ...]`` in billing order and return
+	invoice indexes. ``None`` means no app has an opinion, so the legacy order
+	(primary invoice last) is kept.
+	"""
+	companies = [group["company"] for group in groups]
+	flags = {
+		row["name"]: row["is_pkp"]
+		for row in frappe.get_all("Company", filters={"name": ["in", companies]}, fields=["name", "is_pkp"])
+	}
+	payload = [{"company": company, "is_pkp": flags.get(company)} for company in companies]
+	order = None
+	for hook in frappe.get_hooks("pos_next_split_payment_order"):
+		chosen = frappe.get_attr(hook)(payload)
+		if chosen:
+			order = chosen
+	return order
+
+
+def _allocate_payments(payments, totals, order=None, precision=2):
 	"""Payment rows per invoice for one basket payment.
 
-	Every invoice but the first is paid exactly its total, split across payment
-	modes in the basket's proportions. The first (primary) invoice takes the
-	rest, change included. A basket paid short (a down payment) pays those
-	invoices as far as the money goes, never more than was tendered.
+	Invoices are filled in ``order`` when given (e.g. PKP before non-PKP),
+	otherwise from the second invoice onwards as before. The first (primary)
+	invoice is always left until last and takes the rest, change included. A
+	basket paid short (a down payment) pays the invoices in that order as far
+	as the money goes, never more than was tendered.
 	"""
 	modes = [p for p in payments if flt(p.get("amount"))]
 	per_invoice = [[] for _ in totals]
 	left = {index: flt(p.get("amount")) for index, p in enumerate(modes)}
 	unspent = sum(left.values())
 
-	for invoice_index in range(1, len(totals)):
+	indices = (
+		range(1, len(totals))
+		if order is None
+		else [index for index in order if index != 0 and 0 <= index < len(totals)]
+	)
+	for invoice_index in indices:
 		due = min(totals[invoice_index], unspent)
 		unspent = flt(unspent - due, precision)
 		shares = _prorate(due, [flt(p.get("amount")) for p in modes], precision)

@@ -2542,30 +2542,36 @@ def submit_invoice(invoice=None, data=None):
 
 
 @frappe.whitelist()
-def get_invoice(invoice_name):
+def get_invoice(invoice_name, doctype=None):
 	"""
-	Get a single invoice with all details for POS.
+	Get a single invoice (or a Sales Order made at the till) for printing.
 
 	Args:
-		invoice_name: Sales Invoice name
+		invoice_name: Sales Invoice or Sales Order name
+		doctype: optional; detected from the name when omitted, so callers that
+			only know a name (print dialogs, batch print) work for orders too
 
 	Returns:
-		Complete invoice document with items and payments
+		Complete document with items and payments
 	"""
 	if not invoice_name:
 		frappe.throw(_("Invoice name is required"))
 
-	if not frappe.db.exists("Sales Invoice", invoice_name):
+	if not doctype:
+		doctype = (
+			"Sales Order"
+			if not frappe.db.exists("Sales Invoice", invoice_name)
+			and frappe.db.exists("Sales Order", invoice_name)
+			else "Sales Invoice"
+		)
+	if doctype not in ("Sales Invoice", "Sales Order") or not frappe.db.exists(doctype, invoice_name):
 		frappe.throw(_("Invoice {0} does not exist").format(invoice_name))
 
 	# Check permissions
-	if not frappe.has_permission("Sales Invoice", "read", invoice_name):
+	if not frappe.has_permission(doctype, "read", invoice_name):
 		frappe.throw(_("You don't have permission to view this invoice"))
 
-	# Get invoice document
-	invoice = frappe.get_doc("Sales Invoice", invoice_name)
-
-	return invoice.as_dict()
+	return frappe.get_doc(doctype, invoice_name).as_dict()
 
 
 @frappe.whitelist()

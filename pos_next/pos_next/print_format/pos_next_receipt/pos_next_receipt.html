@@ -6,16 +6,24 @@
 {%- macro money(value) -%}{{ currency_symbol }} {{ frappe.utils.fmt_money(value or 0, precision=0) }}{%- endmacro -%}
 {%- set tax_total = doc.total_taxes_and_charges or 0 -%}
 {%- set additional_discount = (doc.discount_amount or 0)|abs -%}
+{#- A Sales Order made at the till (nextend POS Terpadu) prints as an order slip: no payments table, its down payment is advance_paid. -#}
+{%- set is_order = doc.doctype == "Sales Order" -%}
 
 <div class="receipt">
 	<div class="header">
 		<div class="company-name">{{ doc.company | e }}</div>
-		<div class="receipt-title">Nota Penjualan</div>
+		<div class="receipt-title">{{ "Pesanan Penjualan" if is_order else "Nota Penjualan" }}</div>
 	</div>
 
 	<div class="receipt-meta">
-		<div class="receipt-meta-row"><span class="receipt-meta-label">No. nota</span><span class="receipt-meta-value">{{ doc.name | e }}</span></div>
-		<div class="receipt-meta-row"><span class="receipt-meta-label">Tanggal</span><span class="receipt-meta-value">{{ doc.posting_date }} {{ (doc.posting_time|string).split('.')[0] if doc.posting_time else '' }}</span></div>
+		<div class="receipt-meta-row"><span class="receipt-meta-label">{{ "No. pesanan" if is_order else "No. nota" }}</span><span class="receipt-meta-value">{{ doc.name | e }}</span></div>
+		<div class="receipt-meta-row"><span class="receipt-meta-label">Tanggal</span><span class="receipt-meta-value">{% if is_order %}{{ frappe.utils.formatdate(doc.transaction_date) }}{% else %}{{ doc.posting_date }} {{ (doc.posting_time|string).split('.')[0] if doc.posting_time else '' }}{% endif %}</span></div>
+		{%- if doc.get("nextend_kode_grup") -%}
+		<div class="receipt-meta-row"><span class="receipt-meta-label">Kode pesanan</span><span class="receipt-meta-value">{{ doc.nextend_kode_grup | e }}</span></div>
+		{%- endif -%}
+		{%- if is_order and doc.delivery_date -%}
+		<div class="receipt-meta-row"><span class="receipt-meta-label">Tanggal kirim</span><span class="receipt-meta-value">{{ frappe.utils.formatdate(doc.delivery_date) }}</span></div>
+		{%- endif -%}
 		{%- if doc.customer_name -%}
 		<div class="receipt-meta-row"><span class="receipt-meta-label">Pelanggan</span><span class="receipt-meta-value">{{ doc.customer_name | e }}</span></div>
 		{%- endif -%}
@@ -60,7 +68,17 @@
 		<div class="receipt-row grand-total"><span>TOTAL</span><span>{{ money(doc.grand_total) }}</span></div>
 	</div>
 
-	{%- if doc.payments -%}
+	{%- if is_order -%}
+	{%- set order_total = doc.rounded_total or doc.grand_total -%}
+	<div class="receipt-payments">
+		<div class="receipt-row total-paid"><span>Uang muka</span><span>{{ money(doc.advance_paid or 0) }}</span></div>
+		{%- if order_total - (doc.advance_paid or 0) > 0 -%}
+		<div class="receipt-row outstanding-row"><span>Sisa dibayar saat ambil</span><span>{{ money(order_total - (doc.advance_paid or 0)) }}</span></div>
+		{%- else -%}
+		<div class="receipt-row"><span>Status</span><span>Lunas</span></div>
+		{%- endif -%}
+	</div>
+	{%- elif doc.payments -%}
 	<div class="receipt-payments">
 		{%- for payment in doc.payments -%}
 		<div class="receipt-row payment-row"><span>{{ payment.mode_of_payment | e }}</span><span>{{ money(payment.amount) }}</span></div>
@@ -77,7 +95,11 @@
 
 	<div class="footer">
 		<div class="receipt-thanks">Terima kasih atas kepercayaan anda.</div>
+		{%- if is_order -%}
+		<div class="receipt-policy">Simpan struk ini dan sebutkan kode pesanan saat mengambil barang.</div>
+		{%- else -%}
 		<div class="receipt-policy">Barang yang sudah dibeli dapat ditukar di hari yang sama dan tidak bisa dikembalikan.</div>
+		{%- endif -%}
 	</div>
 </div>
 

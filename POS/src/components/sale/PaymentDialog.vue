@@ -25,6 +25,34 @@
 					]"
 					:style="{ maxHeight: isMobileView ? 'none' : dynamicLeftColumnHeight }"
 				>
+					<!-- Nota or order: chosen again here so the cashier confirms it
+					     before paying (the cart's toggle is small and easy to miss) -->
+					<div
+						v-if="allowDoctypeSwitch"
+						class="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1"
+						role="radiogroup"
+						:aria-label="__('Jenis transaksi')"
+					>
+						<button
+							v-for="option in doctypeOptions"
+							:key="option.value"
+							type="button"
+							role="radio"
+							:aria-checked="targetDoctype === option.value"
+							:disabled="isSubmitting"
+							:class="[
+								'flex flex-col items-center rounded-md px-2 py-2 text-center transition-colors',
+								targetDoctype === option.value
+									? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-300'
+									: 'text-gray-600 hover:text-gray-900',
+							]"
+							@click="emit('update:targetDoctype', option.value)"
+						>
+							<span class="text-sm font-semibold">{{ option.label }}</span>
+							<span class="text-[11px] text-gray-500">{{ option.hint }}</span>
+						</button>
+					</div>
+
 					<!-- Delivery Date for Sales Orders -->
 					<div
 						v-if="isSalesOrder"
@@ -2315,6 +2343,11 @@ const props = defineProps({
 		type: String,
 		default: "Sales Invoice",
 	},
+	/** Show the Nota / Pesanan choice; the parent owns the value (v-model:target-doctype). */
+	allowDoctypeSwitch: {
+		type: Boolean,
+		default: false,
+	},
 	isSubmitting: {
 		type: Boolean,
 		default: false,
@@ -2340,7 +2373,13 @@ const emit = defineEmits([
 	"update-additional-discount",
 	"show-offers",
 	"show-coupon",
+	"update:targetDoctype",
 ]);
+
+const doctypeOptions = [
+	{ value: "Sales Invoice", label: __("Nota"), hint: __("Barang dibawa sekarang") },
+	{ value: "Sales Order", label: __("Pesanan"), hint: __("Diambil/dikirim nanti") },
+];
 
 const show = computed({
 	get: () => props.modelValue,
@@ -2381,6 +2420,11 @@ const walletPaymentMethods = ref(new Set()); // Set of mode_of_payment names tha
 const deliveryDate = ref("");
 const today = new Date().toISOString().split("T")[0];
 const isSalesOrder = computed(() => props.targetDoctype === "Sales Order");
+// Switching inside the open dialog: an order needs a delivery date, a nota does not.
+watch(isSalesOrder, (order) => {
+	deliveryDate.value = order ? today : "";
+	if (order) dikirim.value = false;
+});
 
 // Column refs for height matching
 const rightColumnRef = ref(null);

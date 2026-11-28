@@ -694,11 +694,15 @@
 				:tax-amount="cartStore.totalTax"
 				:discount-amount="cartStore.totalDiscount"
 				:target-doctype="cartStore.targetDoctype"
+				:allow-doctype-switch="
+					posSettingsStore.allowSalesOrder && !posSettingsStore.createOnlySalesOrder
+				"
 				:is-submitting="cartStore.isSubmitting"
 				:applied-offer-count="cartStore.appliedOffers.length"
 				:locked-sales-person="cartStore.posOrderSalesPerson"
 				:order-delivery="cartStore.posOrderDelivery"
 				@payment-completed="handlePaymentCompleted"
+				@update:target-doctype="cartStore.setTargetDoctype"
 				@update-additional-discount="handleAdditionalDiscountUpdate"
 				@show-offers="uiStore.showOffersDialog = true"
 				@show-coupon="uiStore.showCouponDialog = true"
@@ -1174,7 +1178,12 @@
 			<!-- Success Dialog -->
 			<Dialog
 				v-model="uiStore.showSuccessDialog"
-				:options="{ title: __('Invoice Created Successfully'), size: 'md' }"
+				:options="{
+					title: successIsOrder
+						? __('Pesanan Berhasil Dibuat')
+						: __('Invoice Created Successfully'),
+					size: 'md',
+				}"
 			>
 				<template #body-content>
 					<div class="text-center py-6">
@@ -1197,13 +1206,30 @@
 						</div>
 						<h3 class="mt-4 text-lg font-medium text-gray-900">
 							{{
-								__("Invoice {0} created successfully!", [
-									uiStore.lastInvoiceNames.join(" + "),
-								])
+								successIsOrder
+									? __("Pesanan {0} berhasil dibuat!", [
+											uiStore.lastInvoiceNames.join(" + "),
+										])
+									: __("Invoice {0} created successfully!", [
+											uiStore.lastInvoiceNames.join(" + "),
+										])
 							}}
 						</h3>
+						<div
+							v-if="successIsOrder && uiStore.lastKodeGrup"
+							class="mt-3 inline-flex flex-col items-center rounded-lg border border-orange-200 bg-orange-50 px-4 py-2"
+						>
+							<span class="text-xs text-orange-700">{{ __("Kode pesanan") }}</span>
+							<span class="font-mono text-lg font-bold text-orange-800">{{
+								uiStore.lastKodeGrup
+							}}</span>
+						</div>
 						<p class="mt-2 text-sm text-gray-500">
-							{{ __("Paid: {0}", [formatCurrency(uiStore.lastPaidAmount)]) }}
+							{{
+								successIsOrder
+									? __("Uang muka: {0}", [formatCurrency(uiStore.lastPaidAmount)])
+									: __("Paid: {0}", [formatCurrency(uiStore.lastPaidAmount)])
+							}}
 						</p>
 					</div>
 				</template>
@@ -1219,12 +1245,14 @@
 							:disabled="printingInvoices"
 							@click="
 								async () => {
-									const result = await printInvoices(uiStore.lastInvoiceNames);
+									const result = await printInvoices(uiStore.lastInvoiceNames, {
+										doctype: uiStore.lastDoctype,
+									});
 									if (result !== false) uiStore.showSuccessDialog = false;
 								}
 							"
 						>
-							{{ __("Print Invoice") }}
+							{{ successIsOrder ? __("Cetak Pesanan") : __("Print Invoice") }}
 						</Button>
 					</div>
 				</template>
@@ -3126,6 +3154,13 @@ async function handlePaymentCompleted(paymentData) {
 					? result.invoices
 					: [{ ...result, name: invoiceName }];
 				const invoiceNames = invoices.map((invoice) => invoice.name);
+				// nextend POS Terpadu returns the orders of one basket under a group code
+				const successMeta = {
+					doctype: result.doctype || "Sales Invoice",
+					kodeGrup: result.kode_grup || "",
+				};
+				const docLabel =
+					successMeta.doctype === "Sales Order" ? __("Pesanan") : __("Invoice");
 				const invoiceTotal = invoices.reduce(
 					(sum, invoice) => sum + (invoice.grand_total || invoice.total || 0),
 					0
@@ -3153,23 +3188,30 @@ async function handlePaymentCompleted(paymentData) {
 
 				if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 					try {
-						await printInvoices(invoiceNames, { throwOnError: true });
+						await printInvoices(invoiceNames, {
+							throwOnError: true,
+							doctype: successMeta.doctype,
+						});
 						showSuccess(
-							__("Invoice {0} created and sent to printer", [
+							__("{0} {1} created and sent to printer", [
+								docLabel,
 								invoiceNames.join(" + "),
 							])
 						);
 					} catch (error) {
 						log.error("Auto-print error:", error);
-						uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount);
+						uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount, successMeta);
 						showWarning(
-							__("Invoice {0} created but print failed", [invoiceNames.join(" + ")])
+							__("{0} {1} created but print failed", [
+								docLabel,
+								invoiceNames.join(" + "),
+							])
 						);
 					}
 				} else {
-					uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount);
+					uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount, successMeta);
 					showSuccess(
-						__("Invoice {0} created successfully", [invoiceNames.join(" + ")])
+						__("{0} {1} created successfully", [docLabel, invoiceNames.join(" + ")])
 					);
 				}
 			}
@@ -3927,8 +3969,9 @@ function handleViewInvoice(invoice) {
 }
 
 const printingInvoices = ref(false);
+const successIsOrder = computed(() => uiStore.lastDoctype === "Sales Order");
 
-async function printInvoices(names, { throwOnError = false } = {}) {
+async function printInvoices(names, { throwOnError = false, doctype = "Sales Invoice" } = {}) {
 	if (printingInvoices.value) {
 		if (throwOnError)
 			throw new Error(__("Pencetakan sebelumnya masih berlangsung. Silakan coba lagi."));
@@ -3937,7 +3980,7 @@ async function printInvoices(names, { throwOnError = false } = {}) {
 	printingInvoices.value = true;
 	try {
 		if (names.length === 1)
-			return await handlePrintInvoice({ name: names[0] }, { throwOnError });
+			return await handlePrintInvoice({ name: names[0], doctype }, { throwOnError });
 		return await printInvoiceBatch(names, { silent: posSettingsStore.silentPrint });
 	} catch (error) {
 		log.error("Batch print failed:", error);

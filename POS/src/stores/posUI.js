@@ -45,6 +45,10 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	const lastInvoiceNames = ref([]);
 	const lastInvoiceTotal = ref(0);
 	const lastPaidAmount = ref(0);
+	/** "Sales Order" when the last checkout made orders instead of invoices */
+	const lastDoctype = ref("Sales Invoice");
+	/** nextend group code that ties the orders of one basket together */
+	const lastKodeGrup = ref("");
 	/** Full receipt payload for invoices not yet on the server (offline queue) */
 	const lastOfflinePrintDoc = ref(null);
 
@@ -93,7 +97,9 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showErrorDialog.value = false;
 	}
 
-	function showSuccess(invoiceName, total, paidAmount = null) {
+	function showSuccess(invoiceName, total, paidAmount = null, { doctype, kodeGrup } = {}) {
+		lastDoctype.value = doctype || "Sales Invoice";
+		lastKodeGrup.value = kodeGrup || "";
 		lastInvoiceNames.value = Array.isArray(invoiceName) ? invoiceName : [invoiceName];
 		lastInvoiceName.value = lastInvoiceNames.value[0] || "";
 		lastInvoiceTotal.value = total;
@@ -197,6 +203,8 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		lastInvoiceNames,
 		lastInvoiceTotal,
 		lastPaidAmount,
+		lastDoctype,
+		lastKodeGrup,
 		lastOfflinePrintDoc,
 		initialCustomerName,
 		mobileActiveTab,

@@ -423,7 +423,7 @@ export async function silentPrintDoc(doctype, name, printFormat) {
  * formats that rely on Bootstrap layout classes may render differently.
  * Paper size and margins are controlled by the QZ Tray config in qzTray.js.
  */
-export async function silentPrintInvoice(invoiceName, printFormat = null) {
+export async function silentPrintInvoice(invoiceName, printFormat = null, doctype = "Sales Invoice") {
 	if (isLocalOnlyInvoiceName(invoiceName)) {
 		const doc = await hydrateLocalOnlyInvoice({ name: invoiceName });
 		if (doc.items?.length > 0) return silentPrintInvoiceFromDoc(doc);
@@ -435,7 +435,7 @@ export async function silentPrintInvoice(invoiceName, printFormat = null) {
 	}
 	const format = printFormat || DEFAULT_PRINT_FORMAT;
 
-	await silentPrintDoc("Sales Invoice", invoiceName, format);
+	await silentPrintDoc(doctype, invoiceName, format);
 	log.info(`Silent print sent for ${invoiceName}`);
 	return true;
 }
@@ -478,7 +478,7 @@ export async function printWithSilentFallback(invoiceData, printFormat = null) {
 	}
 
 	try {
-		await silentPrintInvoice(invoiceName, printFormat);
+		await silentPrintInvoice(invoiceName, printFormat, invoiceData.doctype || "Sales Invoice");
 		return { method: "silent", success: true };
 	} catch (err) {
 		log.warn("Silent print failed, falling back to browser:", err?.message || err);

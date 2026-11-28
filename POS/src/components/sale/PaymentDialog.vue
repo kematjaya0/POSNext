@@ -3476,11 +3476,12 @@ const canComplete = computed(() => {
 		return totalPaid.value === 0;
 	}
 
-	// A Sales Order takes a down payment; the rest is paid when the order is
-	// collected (nextend Sales Order Aktif). This does not depend on the POS
-	// Settings "Allow Partial Payment", which is about leaving invoices unpaid.
+	// A Sales Order takes any down payment, or none (client 2026-11-28); the
+	// rest is paid when the order is collected (nextend Sales Order Aktif).
+	// This does not depend on the POS Settings "Allow Partial Payment", which
+	// is about leaving invoices unpaid.
 	if (isSalesOrder.value) {
-		return totalPaid.value > 0 && paymentEntries.value.length > 0;
+		return true;
 	}
 
 	// "Pay on Receivable Account": the chosen account holds the unpaid balance
@@ -3509,7 +3510,10 @@ const paymentButtonText = computed(() => {
 	if (props.prepaidAmount > 0 && roundCurrency(props.grandTotal) <= 0) {
 		return __("Buat Invoice");
 	}
-	if (isSalesOrder.value && totalPaid.value > 0 && remainingAmount.value > 0) {
+	if (isSalesOrder.value && totalPaid.value <= 0) {
+		return __("Simpan Sales Order (tanpa DP)");
+	}
+	if (isSalesOrder.value && remainingAmount.value > 0) {
 		return __("Simpan Sales Order (DP)");
 	}
 	// Show "Complete Payment" if fully paid or write-off covers remaining

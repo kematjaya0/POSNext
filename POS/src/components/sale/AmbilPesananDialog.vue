@@ -213,9 +213,9 @@
 								variant="solid"
 								size="lg"
 								:loading="saving"
-								@click="totalSisa > 0 ? (showPayment = true) : bayar({ payments: [] })"
+								@click="showPayment = true"
 							>
-								{{ totalSisa > 0 ? __("Bayar") : __("Buat Invoice") }}
+								{{ totalSisa > 0 ? __("Bayar") : __("Checkout") }}
 							</Button>
 						</div>
 					</template>

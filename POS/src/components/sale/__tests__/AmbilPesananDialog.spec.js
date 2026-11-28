@@ -41,7 +41,7 @@ vi.mock("@/components/sale/PaymentDialog.vue", () => ({
 		],
 		emits: ["payment-completed", "update:modelValue"],
 		template: `<div v-if="modelValue" class="stub-payment" :data-locked="lockedDoctype" :data-prepaid="prepaidAmount" :data-order-total="orderTotal" :data-grand-total="grandTotal">
-			<button @click="$emit('payment-completed', { payments: [{ mode_of_payment: 'Tunai', amount: 1500000 }] })">
+			<button @click="$emit('payment-completed', { payments: grandTotal > 0 ? [{ mode_of_payment: 'Tunai', amount: 1500000 }] : [] })">
 				Selesaikan pembayaran
 			</button>
 		</div>`,
@@ -202,7 +202,7 @@ describe("AmbilPesananDialog", () => {
 		expect(wrapper.text()).toContain("Kembali ke daftar Sales Order");
 	});
 
-	it("Sales Order yang lunas lewat DP langsung dibuat invoice tanpa dialog bayar", async () => {
+	it("Sales Order yang lunas lewat DP tetap melewati checkout sebelum jadi invoice", async () => {
 		const lunas = {
 			...GRUP,
 			orders: GRUP.orders.map((order) => ({ ...order, uang_muka: order.total, sisa: 0 })),
@@ -215,11 +215,25 @@ describe("AmbilPesananDialog", () => {
 		await cari(wrapper);
 		await wrapper
 			.findAll("button")
-			.find((b) => b.text() === "Buat Invoice")
+			.find((b) => b.text() === "Checkout")
 			.trigger("click");
 		await flushPromises();
 
-		expect(wrapper.find(".stub-payment").exists()).toBe(false);
+		// Belum ada invoice sebelum kasir mengonfirmasi di checkout.
+		const payment = wrapper.find(".stub-payment");
+		expect(payment.exists()).toBe(true);
+		expect(payment.attributes("data-grand-total")).toBe("0");
+		expect(payment.attributes("data-prepaid")).toBe("2000000");
+		expect(call).not.toHaveBeenCalledWith(
+			"nextend.penjualan_grup.api.buat_nota_dari_grup",
+			expect.anything()
+		);
+
+		await wrapper
+			.findAll("button")
+			.find((b) => b.text() === "Selesaikan pembayaran")
+			.trigger("click");
+		await flushPromises();
 		expect(call).toHaveBeenCalledWith("nextend.penjualan_grup.api.buat_nota_dari_grup", {
 			kode_grup: "SOG5",
 			payments: [],

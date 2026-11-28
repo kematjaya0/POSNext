@@ -3476,6 +3476,13 @@ const canComplete = computed(() => {
 		return totalPaid.value === 0;
 	}
 
+	// A Sales Order takes a down payment; the rest is paid when the order is
+	// collected (nextend Sales Order Aktif). This does not depend on the POS
+	// Settings "Allow Partial Payment", which is about leaving invoices unpaid.
+	if (isSalesOrder.value) {
+		return totalPaid.value > 0 && paymentEntries.value.length > 0;
+	}
+
 	// "Pay on Receivable Account": the chosen account holds the unpaid balance
 	if (selectedReceivableAccount.value && props.allowCreditSale) {
 		return totalPaid.value <= roundCurrency(props.grandTotal) + 0.01;
@@ -3501,6 +3508,9 @@ const paymentButtonText = computed(() => {
 	}
 	if (props.prepaidAmount > 0 && roundCurrency(props.grandTotal) <= 0) {
 		return __("Buat Invoice");
+	}
+	if (isSalesOrder.value && totalPaid.value > 0 && remainingAmount.value > 0) {
+		return __("Simpan Sales Order (DP)");
 	}
 	// Show "Complete Payment" if fully paid or write-off covers remaining
 	if (remainingAmount.value === 0 || (applyWriteOff.value && canWriteOff.value)) {

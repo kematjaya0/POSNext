@@ -37,7 +37,7 @@
 						>
 							<td class="py-2 font-medium">{{ row.item_code }}</td>
 							<td class="py-2 font-mono">{{ row.dari_so }}</td>
-							<td class="py-2 font-mono">{{ row.ke_so }}</td>
+							<td class="py-2 font-mono">{{ row.ke_so || __("SO baru {0}", [row.ke_company]) }}</td>
 							<td class="py-2 text-end">
 								<input
 									v-model.number="qty[rowKey(row)]"
@@ -92,7 +92,7 @@ const loading = ref(false);
 const saving = ref(false);
 const mengirim = ref("");
 
-const rowKey = (row) => `${row.dari_so}:${row.ke_so}:${row.item_code}`;
+const rowKey = (row) => `${row.dari_so}:${row.ke_so || row.ke_company}:${row.item_code}`;
 const barisKunci = rowKey;
 
 watch(show, (open) => {
@@ -127,7 +127,8 @@ async function ajukan(row) {
 			item_code: row.item_code,
 			qty: jumlah,
 			dari_so: row.dari_so,
-			ke_so: row.ke_so,
+			ke_so: row.ke_so || null,
+			ke_company: row.ke_company,
 		});
 		showSuccess(__("Usulan pindah dikirim ke kepala toko."));
 		emit("submitted");

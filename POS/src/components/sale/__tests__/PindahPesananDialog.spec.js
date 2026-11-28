@@ -28,6 +28,7 @@ const USULAN = [
 		qty: 7,
 		dari_so: "TXSO5-00001",
 		ke_so: "SO5-00001",
+		ke_company: "BUANA INDAH SENTOSA, CV",
 		warehouse_group: "Cabang 5",
 	},
 ];
@@ -79,9 +80,28 @@ describe("PindahPesananDialog", () => {
 			qty: 6,
 			dari_so: "TXSO5-00001",
 			ke_so: "SO5-00001",
+			ke_company: "BUANA INDAH SENTOSA, CV",
 		});
 		expect(wrapper.emitted("submitted")).toHaveLength(1);
 		expect(showSuccess).toHaveBeenCalled();
+	});
+
+	it("mengajukan ke company yang belum punya SO di grup", async () => {
+		const usulan = [{ ...USULAN[0], ke_so: null }];
+		call.mockImplementation(async (method) => (method.endsWith("usulan_pindah") ? usulan : "PP-1"));
+		const wrapper = await open();
+
+		expect(wrapper.text()).toContain("SO baru BUANA INDAH SENTOSA, CV");
+		await wrapper
+			.findAll("button")
+			.find((b) => b.text() === "Ajukan pindah")
+			.trigger("click");
+		await flushPromises();
+
+		expect(call).toHaveBeenCalledWith(
+			`${METHOD}.ajukan`,
+			expect.objectContaining({ ke_so: null, ke_company: "BUANA INDAH SENTOSA, CV" })
+		);
 	});
 
 	it("menampilkan pesan bila tidak ada usulan", async () => {

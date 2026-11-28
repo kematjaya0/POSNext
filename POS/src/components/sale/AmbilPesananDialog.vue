@@ -18,6 +18,9 @@
 					<div class="text-sm font-semibold text-green-800">
 						{{ __("Nota untuk grup {0} sudah dibuat.", [hasil.kode_grup]) }}
 					</div>
+					<div v-if="Number(hasil.change_amount) > 0" class="text-sm text-green-800">
+						{{ __("Kembalian {0}", [formatCurrency(hasil.change_amount)]) }}
+					</div>
 					<div class="flex flex-wrap gap-2">
 						<Button
 							v-for="invoice in hasil.invoices"

@@ -1447,8 +1447,11 @@ export function useInvoice() {
 				// A multi-company session sends the basket unsaved: the server
 				// allocates it and may bill several companies (split_invoice.py),
 				// which a single-company draft cannot hold.
+				// A Sales Order is split into one order per company by nextend
+				// (penjualan_grup.pesanan), so it is sent unsaved as well: a draft
+				// saved here would be left behind next to the orders made there.
 				let invoiceDoc = invoiceData;
-				if (!directSubmit) {
+				if (!directSubmit && targetDoctype !== "Sales Order") {
 					const draftInvoice = await updateInvoiceResource.submit({
 						data: invoiceData,
 					});

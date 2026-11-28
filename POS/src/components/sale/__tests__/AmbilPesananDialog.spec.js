@@ -204,5 +204,27 @@ describe("AmbilPesananDialog", () => {
 		});
 		expect(wrapper.text()).toContain("TXPJR5-00001");
 		expect(wrapper.text()).toContain("Cetak PJR5-00001");
+		expect(wrapper.text()).not.toContain("Kembalian");
+	});
+
+	it("menampilkan kembalian dari server", async () => {
+		call.mockImplementation(async (method) => {
+			if (method.endsWith("get_pesanan_grup")) return GRUP;
+			if (method.endsWith("buat_nota_dari_grup")) return { ...NOTA, change_amount: 50000 };
+		});
+		const wrapper = await open();
+		await cari(wrapper);
+		await wrapper
+			.findAll("button")
+			.find((b) => b.text() === "Bayar")
+			.trigger("click");
+		await flushPromises();
+		await wrapper
+			.findAll("button")
+			.find((b) => b.text() === "Selesaikan pembayaran")
+			.trigger("click");
+		await flushPromises();
+
+		expect(wrapper.text()).toContain("Kembalian");
 	});
 });

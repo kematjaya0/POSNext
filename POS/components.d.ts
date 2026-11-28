@@ -9,6 +9,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     ActionButton: typeof import('./src/components/common/ActionButton.vue')['default']
+    AmbilPesananDialog: typeof import('./src/components/sale/AmbilPesananDialog.vue')['default']
     ApprovalPendingDialog: typeof import('./src/components/sale/ApprovalPendingDialog.vue')['default']
     AuthorizationDialog: typeof import('./src/components/common/AuthorizationDialog.vue')['default']
     AutocompleteSelect: typeof import('./src/components/common/AutocompleteSelect.vue')['default']
@@ -47,6 +48,7 @@ declare module 'vue' {
     PemakaianTintaDialog: typeof import('./src/components/sale/PemakaianTintaDialog.vue')['default']
     PengeluaranKasDialog: typeof import('./src/components/sale/PengeluaranKasDialog.vue')['default']
     PhoneInput: typeof import('./src/components/common/PhoneInput.vue')['default']
+    PindahPesananDialog: typeof import('./src/components/sale/PindahPesananDialog.vue')['default']
     POSFooter: typeof import('./src/components/common/POSFooter.vue')['default']
     POSHeader: typeof import('./src/components/pos/POSHeader.vue')['default']
     POSSettings: typeof import('./src/components/settings/POSSettings.vue')['default']

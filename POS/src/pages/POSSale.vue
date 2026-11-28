@@ -48,6 +48,26 @@
 						<span>{{ __("Pengeluaran Kas") }}</span>
 					</button>
 					<button
+						v-if="posSettingsStore.allowSelectSalesOrder && !shiftStore.isSpgMode"
+						@click="showAmbilPesananDialog = true"
+						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-indigo-50 flex items-center gap-3 transition-colors"
+					>
+						<svg
+							class="w-5 h-5 text-indigo-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
+							/>
+						</svg>
+						<span>{{ __("Ambil Pesanan") }}</span>
+					</button>
+					<button
 						v-if="!shiftStore.isSpgMode"
 						@click="showTerimaTransferDialog = true"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-green-50 flex items-center gap-3 transition-colors"
@@ -721,6 +741,12 @@
 				v-model="showPengeluaranKasDialog"
 				:offline="offlineStore.isOffline"
 			/>
+			<AmbilPesananDialog
+				v-model="showAmbilPesananDialog"
+				:pos-profile="cartStore.posProfile"
+				:currency="shiftStore.profileCurrency"
+				@print-invoice="(name) => handlePrintInvoice({ name })"
+			/>
 			<TerimaTransferDialog
 				v-model="showTerimaTransferDialog"
 				:pos-profile="cartStore.posProfile"
@@ -1283,6 +1309,7 @@ import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import PemakaianTintaDialog from "@/components/sale/PemakaianTintaDialog.vue";
 import PengeluaranKasDialog from "@/components/sale/PengeluaranKasDialog.vue";
 import PanduanDialog from "@/components/sale/PanduanDialog.vue";
+import AmbilPesananDialog from "@/components/sale/AmbilPesananDialog.vue";
 import TerimaTransferDialog from "@/components/sale/TerimaTransferDialog.vue";
 import TransferShiftDialog from "@/components/sale/TransferShiftDialog.vue";
 import SpgInvoicesDialog from "@/components/sale/SpgInvoicesDialog.vue";
@@ -1680,7 +1707,8 @@ const tintaUsage = ref({ allowed: false, warehouses: [] });
 
 async function loadTintaUsageContext() {
 	try {
-		tintaUsage.value = (await call("nextend.pemakaian_tinta.get_upload_context")) || tintaUsage.value;
+		tintaUsage.value =
+			(await call("nextend.pemakaian_tinta.get_upload_context")) || tintaUsage.value;
 	} catch {
 		// Offline or nextend without this feature - the menu stays hidden
 	}
@@ -1691,7 +1719,8 @@ const pengeluaranKas = ref({ allowed: false });
 
 async function loadPengeluaranKasContext() {
 	try {
-		pengeluaranKas.value = (await call("nextend.pengeluaran_kas.get_context")) || pengeluaranKas.value;
+		pengeluaranKas.value =
+			(await call("nextend.pengeluaran_kas.get_context")) || pengeluaranKas.value;
 	} catch {
 		// Offline or nextend without this feature - the menu stays hidden
 	}
@@ -1702,6 +1731,7 @@ watch(() => shiftStore.currentShift?.name, loadPengeluaranKasContext);
 // The menu is always shown; the list is fetched each time the dialog opens.
 const showPanduanDialog = ref(false);
 // nextend Treasury: one transfer for several COD notes / Sales Orders
+const showAmbilPesananDialog = ref(false);
 const showTerimaTransferDialog = ref(false);
 // ...and merging several sales paid by one transfer into one for treasury
 const showTransferShiftDialog = ref(false);
@@ -1713,7 +1743,8 @@ async function loadPanduan() {
 	panduanLoading.value = true;
 	panduanError.value = "";
 	try {
-		panduanCategories.value = (await call("nextend.panduan.list_docs", { target: "pos" }))?.categories || [];
+		panduanCategories.value =
+			(await call("nextend.panduan.list_docs", { target: "pos" }))?.categories || [];
 	} catch {
 		panduanCategories.value = [];
 		panduanError.value = __("Panduan tidak bisa dimuat. Periksa koneksi internet.");
@@ -3124,7 +3155,9 @@ async function handlePaymentCompleted(paymentData) {
 					try {
 						await printInvoices(invoiceNames, { throwOnError: true });
 						showSuccess(
-							__("Invoice {0} created and sent to printer", [invoiceNames.join(" + ")])
+							__("Invoice {0} created and sent to printer", [
+								invoiceNames.join(" + "),
+							])
 						);
 					} catch (error) {
 						log.error("Auto-print error:", error);
@@ -3135,7 +3168,9 @@ async function handlePaymentCompleted(paymentData) {
 					}
 				} else {
 					uiStore.showSuccess(invoiceNames, invoiceTotal, paidAmount);
-					showSuccess(__("Invoice {0} created successfully", [invoiceNames.join(" + ")]));
+					showSuccess(
+						__("Invoice {0} created successfully", [invoiceNames.join(" + ")])
+					);
 				}
 			}
 		}
@@ -3895,16 +3930,24 @@ const printingInvoices = ref(false);
 
 async function printInvoices(names, { throwOnError = false } = {}) {
 	if (printingInvoices.value) {
-		if (throwOnError) throw new Error(__("Pencetakan sebelumnya masih berlangsung. Silakan coba lagi."));
+		if (throwOnError)
+			throw new Error(__("Pencetakan sebelumnya masih berlangsung. Silakan coba lagi."));
 		return false;
 	}
 	printingInvoices.value = true;
 	try {
-		if (names.length === 1) return await handlePrintInvoice({ name: names[0] }, { throwOnError });
+		if (names.length === 1)
+			return await handlePrintInvoice({ name: names[0] }, { throwOnError });
 		return await printInvoiceBatch(names, { silent: posSettingsStore.silentPrint });
 	} catch (error) {
 		log.error("Batch print failed:", error);
-		window.frappe?.msgprint({ title: __("Cetak nota gagal"), message: __("Semua nota belum berhasil disiapkan untuk dicetak. Silakan cetak ulang seluruh batch."), indicator: "red" });
+		window.frappe?.msgprint({
+			title: __("Cetak nota gagal"),
+			message: __(
+				"Semua nota belum berhasil disiapkan untuk dicetak. Silakan cetak ulang seluruh batch."
+			),
+			indicator: "red",
+		});
 		if (throwOnError) throw error;
 		return false;
 	} finally {

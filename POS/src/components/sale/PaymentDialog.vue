@@ -39,14 +39,22 @@
 							type="button"
 							role="radio"
 							:aria-checked="targetDoctype === option.value"
-							:disabled="isSubmitting"
+							:disabled="isSubmitting || Boolean(lockedDoctype && lockedDoctype !== option.value)"
+							:title="
+								lockedDoctype && lockedDoctype !== option.value
+									? __('Nota ini berasal dari Sales Order')
+									: ''
+							"
 							:class="[
 								'flex flex-col items-center rounded-md px-2 py-2 text-center transition-colors',
 								targetDoctype === option.value
 									? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-300'
 									: 'text-gray-600 hover:text-gray-900',
+								lockedDoctype && lockedDoctype !== option.value
+									? 'opacity-40 cursor-not-allowed hover:text-gray-600'
+									: '',
 							]"
-							@click="emit('update:targetDoctype', option.value)"
+							@click="!lockedDoctype && emit('update:targetDoctype', option.value)"
 						>
 							<span class="text-sm font-semibold">{{ option.label }}</span>
 							<span class="text-[11px] text-gray-500">{{ option.hint }}</span>
@@ -2348,6 +2356,11 @@ const props = defineProps({
 		type: Boolean,
 		default: false,
 	},
+	/** Show the switch but keep it on this doctype (a nota made from a Sales Order). */
+	lockedDoctype: {
+		type: String,
+		default: "",
+	},
 	isSubmitting: {
 		type: Boolean,
 		default: false,
@@ -2377,8 +2390,8 @@ const emit = defineEmits([
 ]);
 
 const doctypeOptions = [
-	{ value: "Sales Invoice", label: __("Nota"), hint: __("Barang dibawa sekarang") },
-	{ value: "Sales Order", label: __("Pesanan"), hint: __("Diambil/dikirim nanti") },
+	{ value: "Sales Invoice", label: __("Invoice"), hint: __("Barang dibawa sekarang") },
+	{ value: "Sales Order", label: __("Sales Order"), hint: __("Diambil/dikirim nanti") },
 ];
 
 const show = computed({

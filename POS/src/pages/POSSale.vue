@@ -65,7 +65,7 @@
 								d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
 							/>
 						</svg>
-						<span>{{ __("Ambil Pesanan") }}</span>
+						<span>{{ __("Sales Order Aktif") }}</span>
 					</button>
 					<button
 						v-if="!shiftStore.isSpgMode"
@@ -1180,7 +1180,7 @@
 				v-model="uiStore.showSuccessDialog"
 				:options="{
 					title: successIsOrder
-						? __('Pesanan Berhasil Dibuat')
+						? __('Sales Order Berhasil Dibuat')
 						: __('Invoice Created Successfully'),
 					size: 'md',
 				}"
@@ -1207,7 +1207,7 @@
 						<h3 class="mt-4 text-lg font-medium text-gray-900">
 							{{
 								successIsOrder
-									? __("Pesanan {0} berhasil dibuat!", [
+									? __("Sales Order {0} berhasil dibuat!", [
 											uiStore.lastInvoiceNames.join(" + "),
 										])
 									: __("Invoice {0} created successfully!", [
@@ -1219,7 +1219,7 @@
 							v-if="successIsOrder && uiStore.lastKodeGrup"
 							class="mt-3 inline-flex flex-col items-center rounded-lg border border-orange-200 bg-orange-50 px-4 py-2"
 						>
-							<span class="text-xs text-orange-700">{{ __("Kode pesanan") }}</span>
+							<span class="text-xs text-orange-700">{{ __("Kode grup Sales Order") }}</span>
 							<span class="font-mono text-lg font-bold text-orange-800">{{
 								uiStore.lastKodeGrup
 							}}</span>
@@ -1252,7 +1252,7 @@
 								}
 							"
 						>
-							{{ successIsOrder ? __("Cetak Pesanan") : __("Print Invoice") }}
+							{{ successIsOrder ? __("Cetak Sales Order") : __("Print Invoice") }}
 						</Button>
 					</div>
 				</template>
@@ -3160,7 +3160,7 @@ async function handlePaymentCompleted(paymentData) {
 					kodeGrup: result.kode_grup || "",
 				};
 				const docLabel =
-					successMeta.doctype === "Sales Order" ? __("Pesanan") : __("Invoice");
+					successMeta.doctype === "Sales Order" ? __("Sales Order") : __("Invoice");
 				const invoiceTotal = invoices.reduce(
 					(sum, invoice) => sum + (invoice.grand_total || invoice.total || 0),
 					0

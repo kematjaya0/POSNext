@@ -30,9 +30,9 @@ vi.mock("@/components/sale/PindahPesananDialog.vue", () => ({
 }));
 vi.mock("@/components/sale/PaymentDialog.vue", () => ({
 	default: {
-		props: ["modelValue", "grandTotal", "posProfile"],
+		props: ["modelValue", "grandTotal", "posProfile", "allowDoctypeSwitch", "lockedDoctype"],
 		emits: ["payment-completed", "update:modelValue"],
-		template: `<div v-if="modelValue" class="stub-payment">
+		template: `<div v-if="modelValue" class="stub-payment" :data-locked="lockedDoctype">
 			<button @click="$emit('payment-completed', { payments: [{ mode_of_payment: 'Tunai', amount: 1500000 }] })">
 				Selesaikan pembayaran
 			</button>
@@ -141,7 +141,96 @@ async function cari(wrapper, kode = "SOG5") {
 	await flushPromises();
 }
 
+const DAFTAR = [
+	{
+		kode_grup: "SOG5-LAMA",
+		customer: "CUST",
+		customer_name: "Pak Budi",
+		delivery_date: "2026-11-30",
+		orders: [{ name: "TXSO5-00009", company: "PT" }],
+		total: 1000000,
+		uang_muka: 400000,
+		sisa: 600000,
+	},
+	{
+		kode_grup: "SOG5-BARU",
+		customer: "CUST2",
+		customer_name: "Bu Sari",
+		delivery_date: null,
+		orders: [{ name: "SO5-00010", company: "CV" }],
+		total: 200000,
+		uang_muka: 0,
+		sisa: 200000,
+	},
+];
+
 describe("AmbilPesananDialog", () => {
+	it("menampilkan Sales Order aktif cabang dan membuka grup yang diklik", async () => {
+		call.mockImplementation(async (method) => {
+			if (method.endsWith("daftar_pesanan_aktif")) return DAFTAR;
+			if (method.endsWith("get_pesanan_grup")) return GRUP;
+		});
+		const wrapper = await open();
+
+		expect(call).toHaveBeenCalledWith("nextend.penjualan_grup.api.daftar_pesanan_aktif", {
+			pos_profile: "Kasir",
+		});
+		expect(wrapper.text()).toContain("SOG5-LAMA");
+		expect(wrapper.text()).toContain("Bu Sari");
+		expect(wrapper.text()).toContain("600.000");
+
+		// Kotak kode juga menyaring daftar.
+		await wrapper.find("input[type=text]").setValue("sari");
+		expect(wrapper.text()).not.toContain("SOG5-LAMA");
+		expect(wrapper.text()).toContain("SOG5-BARU");
+
+		await wrapper.find("input[type=text]").setValue("");
+		await wrapper.findAll("tbody tr")[0].trigger("click");
+		await flushPromises();
+		expect(call).toHaveBeenCalledWith("nextend.penjualan_grup.api.get_pesanan_grup", {
+			kode_grup: "SOG5-LAMA",
+		});
+		expect(wrapper.text()).toContain("TXSO5-00001");
+		expect(wrapper.text()).toContain("Kembali ke daftar Sales Order");
+	});
+
+	it("Sales Order yang lunas lewat DP langsung dibuat invoice tanpa dialog bayar", async () => {
+		const lunas = {
+			...GRUP,
+			orders: GRUP.orders.map((order) => ({ ...order, uang_muka: order.total, sisa: 0 })),
+		};
+		call.mockImplementation(async (method) => {
+			if (method.endsWith("get_pesanan_grup")) return lunas;
+			if (method.endsWith("buat_nota_dari_grup")) return NOTA;
+		});
+		const wrapper = await open();
+		await cari(wrapper);
+		await wrapper
+			.findAll("button")
+			.find((b) => b.text() === "Buat Invoice")
+			.trigger("click");
+		await flushPromises();
+
+		expect(wrapper.find(".stub-payment").exists()).toBe(false);
+		expect(call).toHaveBeenCalledWith("nextend.penjualan_grup.api.buat_nota_dari_grup", {
+			kode_grup: "SOG5",
+			payments: [],
+			pos_profile: "Kasir",
+		});
+		expect(wrapper.text()).toContain("TXPJR5-00001");
+	});
+
+	it("dialog bayar nota dari Sales Order mengunci pilihan ke Invoice", async () => {
+		const wrapper = await open();
+		await cari(wrapper);
+		await wrapper
+			.findAll("button")
+			.find((b) => b.text() === "Bayar")
+			.trigger("click");
+		await flushPromises();
+		expect(wrapper.find(".stub-payment").attributes("data-locked")).toBe("Sales Invoice");
+	});
+
 	it("menampilkan pesanan grup, uang muka, dan sisa yang belum ditagih", async () => {
 		const wrapper = await open();
 		await cari(wrapper);

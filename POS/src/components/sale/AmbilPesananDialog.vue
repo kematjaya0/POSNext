@@ -1,11 +1,11 @@
 <template>
-	<Dialog v-model="show" :options="{ title: __('Ambil Pesanan'), size: '4xl' }">
+	<Dialog v-model="show" :options="{ title: __('Sales Order Aktif'), size: '4xl' }">
 		<template #body-content>
 			<div class="flex flex-col gap-3 text-start">
 				<p class="text-xs text-gray-600">
 					{{
 						__(
-							"Masukkan atau pindai kode grup pesanan. Kasir menagih sisa pesanan PT dan CV sekaligus; uang muka sudah dikurangi otomatis."
+							"Pilih Sales Order dari daftar, atau ketik/pindai kode grupnya. Sisa Sales Order PT dan CV ditagih sekaligus; uang muka sudah dikurangi otomatis."
 						)
 					}}
 				</p>
@@ -30,8 +30,8 @@
 						>
 							{{ __("Cetak {0}", [invoice.name]) }}
 						</Button>
-						<Button variant="solid" @click="reset">{{
-							__("Ambil pesanan lain")
+						<Button variant="solid" @click="kembaliSetelahBayar">{{
+							__("Sales Order lain")
 						}}</Button>
 					</div>
 				</div>
@@ -69,8 +69,70 @@
 						</p>
 					</div>
 
+					<!-- Sales Order aktif cabang ini: klik untuk ditagih jadi nota -->
+					<section v-if="!grup" class="flex flex-col gap-2">
+						<div class="flex items-center justify-between gap-2">
+							<h3 class="text-sm font-semibold text-gray-800">
+								{{ __("Sales Order aktif cabang ini") }}
+							</h3>
+							<Button variant="subtle" :loading="loadingDaftar" @click="muatDaftar">
+								{{ __("Muat ulang") }}
+							</Button>
+						</div>
+						<p v-if="errorDaftar" class="text-xs text-red-700">{{ errorDaftar }}</p>
+						<p
+							v-else-if="!loadingDaftar && !daftarTampil.length"
+							class="text-xs text-gray-500"
+						>
+							{{ __("Tidak ada Sales Order aktif.") }}
+						</p>
+						<div v-else class="max-h-80 overflow-y-auto rounded-lg border border-gray-200">
+							<table class="w-full text-xs">
+								<thead class="sticky top-0 bg-gray-50 text-gray-500">
+									<tr>
+										<th class="text-start px-2 py-1.5">{{ __("Kode grup") }}</th>
+										<th class="text-start px-2 py-1.5">{{ __("Customer") }}</th>
+										<th class="text-start px-2 py-1.5">{{ __("Tgl kirim") }}</th>
+										<th class="text-end px-2 py-1.5">{{ __("Total") }}</th>
+										<th class="text-end px-2 py-1.5">{{ __("Sisa") }}</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr
+										v-for="row in daftarTampil"
+										:key="row.kode_grup"
+										class="border-t border-gray-100 cursor-pointer hover:bg-indigo-50"
+										tabindex="0"
+										@click="pilih(row)"
+										@keyup.enter="pilih(row)"
+									>
+										<td class="px-2 py-2">
+											<div class="font-mono font-semibold">{{ row.kode_grup }}</div>
+											<div class="text-[11px] text-gray-500">
+												{{ row.orders.map((o) => o.name).join(" + ") }}
+											</div>
+										</td>
+										<td class="px-2 py-2">{{ row.customer_name }}</td>
+										<td class="px-2 py-2">{{ row.delivery_date || "-" }}</td>
+										<td class="px-2 py-2 text-end">{{ formatCurrency(row.total) }}</td>
+										<td class="px-2 py-2 text-end font-semibold">
+											{{ formatCurrency(row.sisa) }}
+										</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</section>
+
 					<!-- Pesanan dalam grup -->
 					<template v-if="grup">
+						<button
+							type="button"
+							class="self-start text-xs text-indigo-700 hover:underline"
+							@click="kembali"
+						>
+							&larr; {{ __("Kembali ke daftar Sales Order") }}
+						</button>
 						<div
 							class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600 rounded bg-gray-50 border border-gray-200 px-3 py-2"
 						>
@@ -151,9 +213,9 @@
 								variant="solid"
 								size="lg"
 								:loading="saving"
-								@click="showPayment = true"
+								@click="totalSisa > 0 ? (showPayment = true) : bayar({ payments: [] })"
 							>
-								{{ __("Bayar") }}
+								{{ totalSisa > 0 ? __("Bayar") : __("Buat Invoice") }}
 							</Button>
 						</div>
 					</template>
@@ -173,6 +235,8 @@
 		:company="firstCompany"
 		:items="paymentItems"
 		:target-doctype="'Sales Invoice'"
+		allow-doctype-switch
+		locked-doctype="Sales Invoice"
 		:allow-partial-payment="false"
 		:allow-credit-sale="false"
 		:allow-delivery="false"
@@ -219,6 +283,19 @@ const loading = ref(false);
 const saving = ref(false);
 const showPayment = ref(false);
 const showPindah = ref(false);
+const daftar = ref([]);
+const loadingDaftar = ref(false);
+const errorDaftar = ref("");
+// The code box also filters the list, so a partial code or name narrows it down.
+const daftarTampil = computed(() => {
+	const q = kode.value.trim().toLowerCase();
+	if (!q) return daftar.value;
+	return daftar.value.filter((row) =>
+		[row.kode_grup, row.customer_name, ...row.orders.map((o) => o.name)].some((v) =>
+			String(v || "").toLowerCase().includes(q)
+		)
+	);
+});
 
 const formatCurrency = (value) => formatCurrencyUtil(Number(value || 0), props.currency);
 const orders = computed(() => grup.value?.orders || []);
@@ -245,7 +322,40 @@ const paymentItems = computed(() =>
 watch(show, (open) => {
 	if (!open) return;
 	reset();
+	muatDaftar();
 });
+
+async function muatDaftar() {
+	if (!props.posProfile || loadingDaftar.value) return;
+	loadingDaftar.value = true;
+	errorDaftar.value = "";
+	try {
+		daftar.value =
+			(await call(`${METHOD}.daftar_pesanan_aktif`, { pos_profile: props.posProfile })) || [];
+	} catch (err) {
+		daftar.value = [];
+		errorDaftar.value = err.message || __("Daftar Sales Order tidak dapat dimuat.");
+	} finally {
+		loadingDaftar.value = false;
+	}
+}
+
+function pilih(row) {
+	kode.value = row.kode_grup;
+	cari();
+}
+
+function kembaliSetelahBayar() {
+	reset();
+	muatDaftar();
+}
+
+function kembali() {
+	grup.value = null;
+	error.value = "";
+	kode.value = "";
+	muatDaftar();
+}
 
 function reset() {
 	kode.value = "";
@@ -277,7 +387,8 @@ async function cari() {
 async function bayar(paymentData) {
 	if (!grup.value || saving.value) return;
 	const payments = (paymentData?.payments || []).filter((row) => Number(row.amount) > 0);
-	if (!payments.length) {
+	// Fully paid by its down payment: the invoices only consume the advance.
+	if (!payments.length && totalSisa.value > 0) {
 		error.value = __("Pilih metode bayar dulu.");
 		showError(error.value);
 		return;
